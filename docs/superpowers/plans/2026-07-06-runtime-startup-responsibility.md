@@ -547,14 +547,12 @@ Replaces the unconditional `200` with a runtime-type-specific readiness gate. Re
 // append to server/api_test.go
 type stubLauncher struct{ err error }
 
-func (s stubLauncher) Prepare() ([]string, error)      { return nil, nil }
-func (s stubLauncher) Ready(context.Context) error     { return s.err }
+func (s stubLauncher) Prepare() ([]string, error)  { return nil, nil }
+func (s stubLauncher) Ready(context.Context) error { return s.err }
 
 func TestHealthReadyReturns200(t *testing.T) {
-	s := New(0)
+	s := setupTestServer(t)
 	s.launcher = stubLauncher{err: nil}
-	engine := gin.New()
-	engine.POST("/vmm/health", s.health)
 
 	w := performJSONRequest(t, s, http.MethodPost, "/vmm/health", nil)
 	if w.Code != http.StatusOK {
@@ -563,10 +561,8 @@ func TestHealthReadyReturns200(t *testing.T) {
 }
 
 func TestHealthNotReadyReturns503(t *testing.T) {
-	s := New(0)
+	s := setupTestServer(t)
 	s.launcher = stubLauncher{err: errors.New("engine down")}
-	engine := gin.New()
-	engine.POST("/vmm/health", s.health)
 
 	w := performJSONRequest(t, s, http.MethodPost, "/vmm/health", nil)
 	if w.Code != http.StatusServiceUnavailable {
@@ -575,7 +571,7 @@ func TestHealthNotReadyReturns503(t *testing.T) {
 }
 ```
 
-Note: `performJSONRequest` already exists in `server/api_test.go`. Add imports `"context"` and `"errors"` if not already present in that file.
+Note: use the existing `setupTestServer(t)` helper (it registers routes on `s.engine`, which `performJSONRequest` calls) — do NOT register routes on a fresh `gin.New()`, that would 404. The `health` handler reads `s.launcher` at call time, so overriding it after `setupTestServer` works. Add imports `"context"` and `"errors"` to `server/api_test.go` (neither is currently imported). The existing `TestHealth` must still pass: `setupTestServer` calls `New(0)`, and with `RUNTIME_TYPE` unset the launcher is the always-ready one → 200.
 
 - [ ] **Step 2: Run test to verify it fails**
 
