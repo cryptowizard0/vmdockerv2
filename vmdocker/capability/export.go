@@ -55,7 +55,6 @@ func Export(ctx context.Context, home string, opts ExportOptions) (ExportResult,
 		ProfileTOML:  profileTOML,
 		ProfileDir:   home,
 		AgentBinPath: opts.AgentBinPath,
-		WrapperPath:  opts.WrapperPath,
 		BuildTag:     opts.BuildTag,
 		PublicZip:    publicZip,
 	})

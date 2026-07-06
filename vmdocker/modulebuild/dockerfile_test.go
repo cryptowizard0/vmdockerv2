@@ -44,7 +44,6 @@ func TestGenerateDockerfile(t *testing.T) {
 	out, err := GenerateDockerfile(DockerfileInput{
 		Profile:     p,
 		AgentBinSrc: "platform/vmdocker-agent",
-		WrapperSrc:  "platform/start-vmdocker-agent.sh",
 	})
 	if err != nil {
 		t.Fatalf("GenerateDockerfile error: %v", err)
@@ -52,7 +51,6 @@ func TestGenerateDockerfile(t *testing.T) {
 	mustContain := []string{
 		"FROM docker/sandbox-templates:shell",
 		"COPY platform/vmdocker-agent /usr/local/bin/vmdocker-agent",
-		"COPY platform/start-vmdocker-agent.sh /usr/local/bin/start-vmdocker-agent.sh",
 		"COPY bin/ /usr/local/bin/",
 		"COPY startup.sh /usr/local/lib/vmdocker-agent/user-startup.sh",
 		"COPY profile.toml /home/hymx/profile.toml",
@@ -62,15 +60,42 @@ func TestGenerateDockerfile(t *testing.T) {
 		"ENV RUNTIME_TYPE=openclaw",
 		"USER hymx",
 		"WORKDIR /home/hymx",
-		`ENTRYPOINT ["/usr/local/bin/start-vmdocker-agent.sh"]`,
+		`ENTRYPOINT ["/usr/local/bin/vmdocker-agent"]`,
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(out, want) {
 			t.Errorf("Dockerfile missing %q\n---\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, `ENTRYPOINT ["/usr/local/bin/startup.sh"]`) ||
-		strings.Contains(out, "COPY startup.sh /usr/local/bin/start-vmdocker-agent.sh") {
+	if strings.Contains(out, "start-vmdocker-agent.sh") {
+		t.Error("wrapper must no longer be referenced")
+	}
+	if strings.Contains(out, `ENTRYPOINT ["/usr/local/bin/startup.sh"]`) {
 		t.Error("user startup.sh must not become the container ENTRYPOINT")
+	}
+}
+
+func TestGenerateDockerfileUsesAdapterEntrypoint(t *testing.T) {
+	profile := Profile{Dockerfile: DockerfileSection{
+		From: "openclaw", Bin: "bin", Startup: "start.sh",
+	}}
+	out, err := GenerateDockerfile(DockerfileInput{
+		Profile:     profile,
+		AgentBinSrc: "platform/vmdocker-agent",
+	})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if !strings.Contains(out, `ENTRYPOINT ["/usr/local/bin/vmdocker-agent"]`) {
+		t.Fatalf("ENTRYPOINT not adapter:\n%s", out)
+	}
+	if strings.Contains(out, "start-vmdocker-agent.sh") {
+		t.Fatalf("wrapper still referenced:\n%s", out)
+	}
+	if !strings.Contains(out, "ENV RUNTIME_TYPE=openclaw") {
+		t.Fatalf("RUNTIME_TYPE dropped:\n%s", out)
+	}
+	if !strings.Contains(out, "user-startup.sh") {
+		t.Fatalf("startup COPY dropped:\n%s", out)
 	}
 }

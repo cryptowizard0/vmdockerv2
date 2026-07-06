@@ -17,15 +17,14 @@ import (
 func main() {
 	profilePath := flag.String("profile", "profile.toml", "path to profile.toml")
 	agentBin := flag.String("agent-bin", os.Getenv("VMDOCKER_AGENT_BIN"), "path to platform adapter binary")
-	wrapper := flag.String("wrapper", os.Getenv("VMDOCKER_WRAPPER"), "path to platform ENTRYPOINT wrapper")
 	flag.Parse()
 
 	profileTOML, err := os.ReadFile(*profilePath)
 	if err != nil {
 		fatal("read profile: %v", err)
 	}
-	if *agentBin == "" || *wrapper == "" {
-		fatal("both -agent-bin and -wrapper (platform B2 artifacts) are required")
+	if *agentBin == "" {
+		fatal("-agent-bin (platform B2 artifact) is required")
 	}
 
 	fmt.Println("[module] building module artifact from profile")
@@ -33,7 +32,6 @@ func main() {
 		ProfileTOML:  profileTOML,
 		ProfileDir:   filepath.Dir(*profilePath),
 		AgentBinPath: *agentBin,
-		WrapperPath:  *wrapper,
 	})
 	if err != nil {
 		fatal("build module artifact: %v", err)

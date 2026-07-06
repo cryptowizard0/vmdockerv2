@@ -30,19 +30,17 @@ func ResolveFROM(alias string) (BaseSpec, error) {
 }
 
 // DockerfileInput carries everything needed to render the standardized
-// Dockerfile. AgentBinSrc/WrapperSrc are build-context paths to the platform
-// adapter binary and ENTRYPOINT wrapper.
+// Dockerfile. AgentBinSrc is the build-context path to the platform adapter
+// binary, which is launched directly as ENTRYPOINT.
 type DockerfileInput struct {
 	Profile     Profile
 	AgentBinSrc string
-	WrapperSrc  string
 }
 
 type dockerfileView struct {
 	BaseImage   string
 	RuntimeType string
 	AgentBinSrc string
-	WrapperSrc  string
 	Bin         string
 	Startup     string
 	Tools       []string
@@ -55,7 +53,6 @@ USER root
 WORKDIR /app
 
 COPY {{.AgentBinSrc}} /usr/local/bin/vmdocker-agent
-COPY {{.WrapperSrc}} /usr/local/bin/start-vmdocker-agent.sh
 
 COPY {{.Bin}}/ /usr/local/bin/
 COPY {{.Startup}} /usr/local/lib/vmdocker-agent/user-startup.sh
@@ -71,13 +68,13 @@ COPY profile.toml /home/hymx/profile.toml
     rm -f /etc/sudoers.d/*
 {{range .Run}}RUN {{.}}
 {{end}}RUN set -eux; \
-    chmod +x /usr/local/bin/* /usr/local/bin/start-vmdocker-agent.sh /usr/local/lib/vmdocker-agent/user-startup.sh; \
+    chmod +x /usr/local/bin/* /usr/local/lib/vmdocker-agent/user-startup.sh; \
     chown -R hymx:hymx /home/hymx /app
 ENV HOME=/home/hymx
 ENV RUNTIME_TYPE={{.RuntimeType}}
 USER hymx
 WORKDIR /home/hymx
-ENTRYPOINT ["/usr/local/bin/start-vmdocker-agent.sh"]
+ENTRYPOINT ["/usr/local/bin/vmdocker-agent"]
 `))
 
 // GenerateDockerfile renders the standardized Dockerfile from a profile.
@@ -93,8 +90,8 @@ func GenerateDockerfile(in DockerfileInput) (string, error) {
 	if strings.TrimSpace(d.Startup) == "" {
 		return "", fmt.Errorf("profile [dockerfile].startup is required")
 	}
-	if strings.TrimSpace(in.AgentBinSrc) == "" || strings.TrimSpace(in.WrapperSrc) == "" {
-		return "", fmt.Errorf("platform AgentBinSrc and WrapperSrc are required")
+	if strings.TrimSpace(in.AgentBinSrc) == "" {
+		return "", fmt.Errorf("platform AgentBinSrc is required")
 	}
 
 	var buf bytes.Buffer
@@ -102,7 +99,6 @@ func GenerateDockerfile(in DockerfileInput) (string, error) {
 		BaseImage:   base.Image,
 		RuntimeType: base.RuntimeType,
 		AgentBinSrc: in.AgentBinSrc,
-		WrapperSrc:  in.WrapperSrc,
 		Bin:         d.Bin,
 		Startup:     d.Startup,
 		Tools:       d.Tools,
