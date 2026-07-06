@@ -238,6 +238,7 @@ func buildDockerContainerConfig(runtimeSpec schema.RuntimeSpec, runtimeEnv, star
 
 	return &container.Config{
 		Image:      runtimeSpec.Image.Name,
+		User:       schema.RuntimeUser,
 		Entrypoint: []string{startCommand[0]},
 		ExposedPorts: nat.PortSet{
 			nat.Port(schema.ExprotPort): struct{}{},
@@ -284,7 +285,7 @@ func buildDockerHostConfig(port int, workspace string) *container.HostConfig {
 		},
 		Resources: container.Resources{
 			Memory:     int64(schema.MaxMem),
-			MemorySwap: -1,
+			MemorySwap: int64(schema.MaxMem), // == Memory: no swap dilution
 			PidsLimit:  &pidsLimit,
 			CPUPeriod:  100000,
 			CPUQuota:   200000,

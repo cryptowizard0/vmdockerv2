@@ -253,7 +253,7 @@ func TestBuildForegroundRuntimeCommandRejectsInvalidQuotedCommand(t *testing.T) 
 	assert.EqualError(t, err, "unterminated quoted string in start command")
 }
 
-func TestBuildDockerContainerConfigUsesImageUserAndParsedCommand(t *testing.T) {
+func TestBuildDockerContainerConfigEnforcesRuntimeUserAndParsedCommand(t *testing.T) {
 	startCommand, err := buildForegroundRuntimeCommand(`/app/start-runtime --label "hello world"`)
 	assert.NoError(t, err)
 
@@ -264,7 +264,7 @@ func TestBuildDockerContainerConfigUsesImageUserAndParsedCommand(t *testing.T) {
 	assert.NoError(t, err)
 	if assert.NotNil(t, config) {
 		assert.Equal(t, "example/runtime:test", config.Image)
-		assert.Empty(t, config.User)
+		assert.Equal(t, schema.RuntimeUser, config.User)
 		assert.Equal(t, []string{"/app/start-runtime"}, []string(config.Entrypoint))
 		assert.Equal(t, []string{"--label", "hello world"}, []string(config.Cmd))
 		assert.Equal(t, containerHome, config.WorkingDir)
