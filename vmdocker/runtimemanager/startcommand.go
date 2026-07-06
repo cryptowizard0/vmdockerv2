@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const defaultRuntimeStartCommand = "/usr/local/bin/start-vmdocker-agent.sh"
+const defaultRuntimeStartCommand = "/usr/local/bin/vmdocker-agent"
 
 func runtimeStartCommandOrDefault(startCommand string) string {
 	if strings.TrimSpace(startCommand) == "" {
