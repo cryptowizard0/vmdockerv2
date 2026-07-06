@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -27,6 +28,8 @@ type DockerManager struct {
 	instances     map[string]*schema.InstanceInfo
 	mutex         sync.RWMutex
 	portAllocator *portAllocator
+	nodeCheckOnce sync.Once
+	nodeCheckErr  error
 }
 
 func newDockerManager() (*DockerManager, error) {
@@ -111,6 +114,14 @@ func (dm *DockerManager) verifyImageSHA(ctx context.Context, imageInfo schema.Im
 }
 
 func (dm *DockerManager) CreateInstance(ctx context.Context, pid string, runtimeSpec schema.RuntimeSpec, runtimeEnv []string) (*schema.InstanceInfo, error) {
+	dm.nodeCheckOnce.Do(func() {
+		strict := os.Getenv("VMDOCKER_NODE_CHECK_STRICT") == "1"
+		_, dm.nodeCheckErr = RunNodeConfinementCheck(ctx, dm.cli, strict)
+	})
+	if dm.nodeCheckErr != nil {
+		return nil, fmt.Errorf("node confinement check failed: %w", dm.nodeCheckErr)
+	}
+
 	dm.mutex.Lock()
 	defer dm.mutex.Unlock()
 

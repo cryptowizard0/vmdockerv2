@@ -64,3 +64,19 @@ func TestNodeCheckStrictEscalatesWarn(t *testing.T) {
 		t.Fatal("strict mode must escalate swap warn to failure")
 	}
 }
+
+func TestNodeCheckReportIncludesAllExpectedChecks(t *testing.T) {
+	report, _ := RunNodeConfinementCheck(context.Background(), fakeInfoClient{info: healthyInfo()}, false)
+	want := map[string]bool{
+		"daemon-version": false, "seccomp": false, "memory-limit": false,
+		"swap-limit": false, "pids-limit": false, "mac": false,
+	}
+	for _, r := range report {
+		want[r.Name] = true
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Fatalf("report missing check %q", name)
+		}
+	}
+}
