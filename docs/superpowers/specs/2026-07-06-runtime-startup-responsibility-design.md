@@ -4,7 +4,7 @@
 - **Date:** 2026-07-06
 - **Owner:** vmdockerv2 / vmdocker_agent
 - **Repos in scope:** `vmdockerv2` (host + modulebuild), `vmdocker_agent` (adapter + startup scripts)
-- **Supersedes:** the `start-vmdocker-agent.sh` wrapper + `bootstrap/*.sh` + `RUNTIME_TYPE` dispatch model
+- **Supersedes:** the `start-vmdocker-agent.sh` wrapper + `bootstrap/*.sh` + the wrapper's `RUNTIME_TYPE`-based bootstrap dispatch (the `RUNTIME_TYPE` env itself is kept — see §2)
 
 ## 1. Background
 
@@ -37,9 +37,16 @@ Two problems drove this redesign:
 - Make the host the single authority for confinement (enforcement, not checks)
   and for readiness (authoritative health polling, not container self-report).
 - Delete non-essential layers: the shell wrapper, `bootstrap/*.sh`, the
-  `RUNTIME_TYPE` env dispatch, the in-container security audit, and the
-  shell-level health-wait loop.
+  wrapper's `RUNTIME_TYPE`-based bootstrap dispatch, the in-container security
+  audit, and the shell-level health-wait loop.
 - Simplify failure semantics to a single health-gated model.
+
+> **Note — `RUNTIME_TYPE` stays.** The `RUNTIME_TYPE` env is *not* removed. It is
+> load-bearing for the adapter: `runtime.newRuntime` reads it to select the
+> runtime backend (openclaw / claude / telegramcustomer / test) when
+> `/vmm/spawn` is called. Only the *wrapper's* use of it — dispatching to
+> `bootstrap/<type>.sh` — goes away, because the wrapper and those hooks are
+> deleted. The generated Dockerfile keeps `ENV RUNTIME_TYPE`.
 
 ## 3. Non-Goals
 
@@ -70,14 +77,15 @@ Three parties in three trust domains. The governing rule:
 ## 5. Target Architecture
 
 ```
-ENTRYPOINT = adapter (Go, PID 1)
+ENTRYPOINT = adapter (Go, PID 1); RUNTIME_TYPE still selects the backend
 
 adapter on startup:
-  1. export platform workspace-convention env
-     (OPENCLAW_STATE_DIR / OPENCLAW_CONFIG_PATH / OPENCLAW_GATEWAY_LOG_PATH ...)
+  1. run runtime-type-specific prep (openclaw: PrepareOpenclawRuntime) and
+     export the resulting workspace-convention env
+     (OPENCLAW_STATE_DIR / OPENCLAW_CONFIG_PATH / OPENCLAW_GATEWAY_LOG_PATH)
   2. spawn start.sh in the background; capture its stdout/stderr to a log
   3. immediately serve the platform API on :8080
-  4. gate /vmm/health on the runtime engine actually being reachable
+  4. gate /vmm/health on runtime-type-specific readiness (see §6.2)
   5. act as PID 1 init: reap zombies, forward SIGTERM (graceful engine stop)
 
 start.sh (module author; platform ships a default template per base image):
@@ -93,8 +101,9 @@ host (vmdockerv2):
 ```
 
 Result: three shell/config layers collapse to **two platform entities + one
-author script**. `start-vmdocker-agent.sh`, `bootstrap/`, and `RUNTIME_TYPE` are
-removed.
+author script**. `start-vmdocker-agent.sh` and `bootstrap/` are removed;
+`RUNTIME_TYPE` is retained (it drives adapter backend selection and per-type
+readiness).
 
 ## 6. Responsibilities
 
@@ -149,19 +158,32 @@ host does **not**: inspect image contents.
 ### 6.2 adapter (Go, PID 1) — vmdocker_agent
 
 Absorbs the former wrapper. The adapter is the trusted supervisor of the
-untrusted `start.sh`:
+untrusted `start.sh`. The adapter still selects its backend from `RUNTIME_TYPE`
+(`runtime.newRuntime`), so the steps below are runtime-type-aware:
 
-- **Export platform workspace-convention env** (state dir, config path, gateway
-  log path, etc.) before spawning `start.sh`, so the default template consumes
-  fixed paths instead of every module recomputing them.
+- **Runtime-type-specific prep + env export.** Before spawning `start.sh`, run
+  the prep for the selected `RUNTIME_TYPE` and export the resulting
+  workspace-convention env so the default template consumes fixed paths instead
+  of recomputing them. For **openclaw** this is `utils.PrepareOpenclawRuntime`
+  (today invoked via `bootstrap prepare --shell`), exporting `OPENCLAW_STATE_DIR`
+  / `OPENCLAW_CONFIG_PATH` / `OPENCLAW_GATEWAY_LOG_PATH`. For **claude** / **test**
+  there is no engine prep; this step is a no-op.
 - Spawn `start.sh` as a subprocess; do **not** block API serving on its
   completion.
 - Capture `start.sh` stdout/stderr to a log path the host can retrieve.
-- Own `/vmm/health`: return ready only when the runtime engine is actually
-  reachable; otherwise stay not-ready.
+- **Own `/vmm/health` with runtime-type-specific readiness.** The handler today
+  (`server.(*Server).health`) returns `200` unconditionally; this changes to a
+  readiness gate:
+  - **openclaw:** ready only when the gateway is reachable (an
+    `HTTPGatewayClient.Init` / ping to the gateway `/health` succeeds).
+  - **claude:** ready when the `claude` CLI is present on `PATH` (the former
+    `bootstrap/claude.sh` check).
+  - **test:** always ready.
 - **PID 1 init duties, implemented natively in Go:** a signal handler plus a
   `waitpid`/reap loop to reap zombie processes, and `SIGTERM` forwarding to
-  `start.sh` / engine for graceful shutdown. No tini, no shell wrapper.
+  `start.sh` / engine for graceful shutdown. No tini, no shell wrapper. (The
+  server's existing `SIGINT`/`SIGTERM` handling in `Run` is extended, not
+  replaced.)
 
 The old isolation hack (child-process + `timeout` + failure-ignored) is deleted:
 because the adapter is already serving independently of `start.sh`, a hung or
@@ -191,7 +213,7 @@ failure detector; the container never self-reports success authoritatively.
 | `start.sh` exits non-zero (engine not up) | adapter serves; `/vmm/health` stays red; host times out with captured `start.sh` log |
 | `start.sh` hangs / never returns | adapter already serving; `/vmm/health` stays red; host times out with log |
 | `start.sh` behaves maliciously | contained by host (non-root, cap-drop, resource limits); adapter unaffected |
-| engine up and reachable | `/vmm/health` → 200; host marks ready |
+| engine ready per runtime type (§6.2) | `/vmm/health` → 200; host marks ready |
 
 ## 8. Changes by Repo
 
@@ -201,23 +223,38 @@ failure detector; the container never self-reports success authoritatively.
   - `buildDockerContainerConfig`: set non-root `User`; ENTRYPOINT points at the
     adapter (no shell wrapper).
   - `buildDockerHostConfig`: `MemorySwap = Memory`. Network left unchanged.
-- `vmdocker/modulebuild/dockerfile.go`
-  - Remove `start-vmdocker-agent.sh` (`WrapperSrc`) injection and `RUNTIME_TYPE`
-    env; ENTRYPOINT = adapter binary.
-  - `[dockerfile].startup` still COPY'd to the runtime; ship a default
-    `start.sh` template per base image (openclaw, claude).
+- `vmdocker/modulebuild/dockerfile.go` + `dockerfile_test.go`
+  - Remove `start-vmdocker-agent.sh` (`WrapperSrc`) injection; ENTRYPOINT =
+    adapter binary (`/usr/local/bin/vmdocker-agent`). **Keep `ENV RUNTIME_TYPE`**
+    (adapter backend selection). `[dockerfile].startup` still COPY'd to
+    `/usr/local/lib/vmdocker-agent/user-startup.sh`.
+  - Drop the `WrapperSrc` field from `DockerfileInput` / `dockerfileView` and the
+    `WrapperSrc` required-arg check in `GenerateDockerfile`.
+- `vmdocker/modulebuild/build.go`
+  - Drop `BuildOptions.WrapperPath` and the wrapper staging in
+    `stageBuildContext` (no more `platform/start-vmdocker-agent.sh`); keep staging
+    `platform/vmdocker-agent`.
+- `vmdocker/runtimemanager/docker.go`
+  - `buildDockerContainerConfig`: set non-root `User` (aligned with `hymx`);
+    ENTRYPOINT already comes from the image, no shell wrapper.
+  - `buildDockerHostConfig`: `MemorySwap = Memory`. Network left unchanged.
 - vmdockerv2 node startup: add the one-shot `cli.Info()` confinement self-check
   (§6.1), with configurable warn/refuse policy.
 
 ### 8.2 vmdocker_agent
 
-- Adapter: export workspace-convention env; spawn + supervise `start.sh`;
-  capture logs; gate `/vmm/health` on engine reachability; implement PID 1 init
-  natively in Go (reap + `SIGTERM` forwarding).
+- Adapter: run runtime-type-specific prep + export env; spawn + supervise
+  `start.sh`; capture logs; gate `/vmm/health` on runtime-type-specific
+  readiness (§6.2); implement PID 1 init natively in Go (reap + `SIGTERM`
+  forwarding). **Keep `RUNTIME_TYPE` reads in `runtime.newRuntime`.**
 - Delete `start-vmdocker-agent.sh`, `bootstrap/openclaw.sh`,
   `bootstrap/claude.sh`, and `scripts/test_startup_hook_isolation.sh`.
-- Add default `start.sh` template for openclaw (start gateway) and claude
-  (verify CLI).
+- Add default `start.sh` template for openclaw (start gateway using the exported
+  env) and claude (no engine; init only).
+- Update `Dockerfile.openclaw`, `Dockerfile.claude`, `Dockerfile.telegramcustomer`:
+  ENTRYPOINT = adapter (`/app/main`), remove the wrapper COPY + ENTRYPOINT and the
+  `bootstrap/` COPY, COPY the default `start.sh` template to
+  `/usr/local/lib/vmdocker-agent/user-startup.sh`, keep `ENV RUNTIME_TYPE`.
 
 ## 9. Risks & Tradeoffs
 
@@ -244,13 +281,15 @@ failure detector; the container never self-reports success authoritatively.
 ## 10. Acceptance Criteria
 
 1. A module built via modulebuild runs with adapter as ENTRYPOINT, no
-   `start-vmdocker-agent.sh`, no `RUNTIME_TYPE`, no `bootstrap/*.sh`.
+   `start-vmdocker-agent.sh`, no `bootstrap/*.sh`. `ENV RUNTIME_TYPE` is still
+   present and still selects the adapter backend.
 2. Container runs as a fixed non-root uid even if the image declares
    `USER root`; passwordless sudo is impossible (mechanism, not check).
 3. `MemorySwap == Memory` on the spawned container.
 4. openclaw module: default `start.sh` template backgrounds the gateway using
-   the env exported by the adapter; host observes `/vmm/health` → ready only
-   after the gateway is reachable.
+   the env the adapter exported; host observes `/vmm/health` → ready only after
+   the gateway ping succeeds. claude module: `/vmm/health` → ready when the
+   `claude` CLI is on `PATH`. test: always ready.
 5. A hanging or crashing `start.sh` never blocks adapter startup; host times out
    with the captured `start.sh` log available.
 6. Adapter reaps zombies and forwards `SIGTERM` to the engine for graceful
@@ -258,6 +297,8 @@ failure detector; the container never self-reports success authoritatively.
 7. vmdockerv2 node startup runs the `cli.Info()` self-check once, emits a
    structured report, and refuses/warns per the configured policy (defaults per
    §6.1 table).
+8. `vmdocker_agent` base Dockerfiles (`openclaw`, `claude`, `telegramcustomer`)
+   launch the adapter directly as ENTRYPOINT with no wrapper.
 
 ## 11. Future Work
 
