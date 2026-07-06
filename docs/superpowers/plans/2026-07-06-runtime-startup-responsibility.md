@@ -1283,7 +1283,7 @@ Wires `RunNodeConfinementCheck` into the `DockerManager` constructor, once, so a
 
 **Interfaces:**
 - Consumes: `RunNodeConfinementCheck` (Task 10); `*client.Client` satisfies `infoClient`.
-- Produces: node check invoked in the constructor guarded by `sync.Once`; a `refuse` failure is logged (non-fatal by default policy — see note) but surfaced.
+- Produces: node check invoked in the constructor guarded by `sync.Once`; a `refuse`-severity failure makes the constructor return an error (refuse by default — see Step 3).
 
 - [ ] **Step 1: Read the constructor to find the exact name and signature**
 
@@ -1320,15 +1320,16 @@ In `docker.go`, after `cli` is successfully created in the constructor, add (usi
 ```go
 	nodeCheckOnce.Do(func() {
 		strict := os.Getenv("VMDOCKER_NODE_CHECK_STRICT") == "1"
-		if _, err := RunNodeConfinementCheck(context.Background(), cli, strict); err != nil {
-			log.Warn("node confinement check reported problems", "err", err, "strict", strict)
-		}
+		_, nodeCheckErr = RunNodeConfinementCheck(context.Background(), cli, strict)
 	})
+	if nodeCheckErr != nil {
+		return nil, fmt.Errorf("node confinement check failed: %w", nodeCheckErr)
+	}
 ```
 
-Add a package-level `var nodeCheckOnce sync.Once` and ensure `os`, `context`, `sync` are imported.
+Add package-level vars `var nodeCheckOnce sync.Once` and `var nodeCheckErr error` (package-level so the result persists across constructor calls under `sync.Once`), and ensure `os`, `context`, `sync`, `fmt` are imported.
 
-Note: default policy logs the failure (non-fatal) so a misconfigured dev machine still runs; set `VMDOCKER_NODE_CHECK_STRICT=1` to make the constructor refuse. If the spec's production posture requires hard refusal by default, return the error from the constructor instead — confirm with the owner before changing the default.
+Policy (owner-confirmed): **refuse by default.** `RunNodeConfinementCheck` already returns an error on any refuse-severity failure (seccomp, memory-limit, daemon-version) regardless of `strict`, so the constructor refuses node startup on those by default. `VMDOCKER_NODE_CHECK_STRICT=1` additionally escalates warn-severity checks (swap/pids/MAC) to refusal. This matches spec §6.1.
 
 - [ ] **Step 4: Run tests + build**
 
