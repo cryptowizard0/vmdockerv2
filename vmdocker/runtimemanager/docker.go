@@ -116,7 +116,9 @@ func (dm *DockerManager) verifyImageSHA(ctx context.Context, imageInfo schema.Im
 func (dm *DockerManager) CreateInstance(ctx context.Context, pid string, runtimeSpec schema.RuntimeSpec, runtimeEnv []string) (*schema.InstanceInfo, error) {
 	dm.nodeCheckOnce.Do(func() {
 		strict := os.Getenv("VMDOCKER_NODE_CHECK_STRICT") == "1"
-		_, dm.nodeCheckErr = RunNodeConfinementCheck(ctx, dm.cli, strict)
+		checkCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, dm.nodeCheckErr = RunNodeConfinementCheck(checkCtx, dm.cli, strict)
 	})
 	if dm.nodeCheckErr != nil {
 		return nil, fmt.Errorf("node confinement check failed: %w", dm.nodeCheckErr)
