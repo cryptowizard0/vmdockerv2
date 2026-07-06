@@ -148,7 +148,6 @@ func cmdExport(args []string) error {
 	}
 	res, err := capability.Export(context.Background(), ws, capability.ExportOptions{
 		AgentBinPath: f["agent-bin"],
-		WrapperPath:  f["wrapper"],
 		BuildTag:     f["build-tag"],
 		SignerKey:    f["signer-key"],
 	})

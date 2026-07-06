@@ -20,7 +20,6 @@ import (
 // ExportOptions configures image rebuild and module signing for Export.
 type ExportOptions struct {
 	AgentBinPath string
-	WrapperPath  string
 	BuildTag     string
 	SignerKey    string
 }

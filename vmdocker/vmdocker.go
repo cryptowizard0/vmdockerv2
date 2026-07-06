@@ -703,7 +703,6 @@ func (v *VmDocker) applyCapabilityExport(meta vmmSchema.Meta) *vmmSchema.Result 
 	}
 	exported, err := capability.Export(context.Background(), home, capability.ExportOptions{
 		AgentBinPath: os.Getenv("VMDOCKER_AGENT_BIN"),
-		WrapperPath:  os.Getenv("VMDOCKER_WRAPPER"),
 		BuildTag:     paramValue(meta.Params, "build_tag", "Build-Tag"),
 		SignerKey:    os.Getenv("VMDOCKER_MODULE_SIGNER_KEY"),
 	})
