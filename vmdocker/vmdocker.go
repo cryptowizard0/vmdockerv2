@@ -677,8 +677,6 @@ func (v *VmDocker) applyCapabilityAction(meta vmmSchema.Meta) (*vmmSchema.Result
 	switch strings.ToLower(strings.TrimSpace(meta.Action)) {
 	case "export":
 		return v.applyCapabilityExport(meta), true
-	case "import":
-		return v.applyCapabilityImport(meta), true
 	default:
 		return nil, false
 	}
@@ -713,20 +711,6 @@ func (v *VmDocker) applyCapabilityExport(meta vmmSchema.Meta) *vmmSchema.Result 
 		Output: exported.Collection,
 		Data:   arutils.Base64Encode(exported.ModuleBytes),
 	}
-}
-
-func (v *VmDocker) applyCapabilityImport(meta vmmSchema.Meta) *vmmSchema.Result {
-	moduleBytes, err := arutils.Base64Decode(meta.Data)
-	if err != nil {
-		return &vmmSchema.Result{Error: err}
-	}
-	result, err := capability.Import(v.instanceInfo.Workspace, moduleBytes, capability.ImportOptions{
-		OnConflict: paramValue(meta.Params, "on_conflict", "On-Conflict"),
-	})
-	if err != nil {
-		return &vmmSchema.Result{Error: err}
-	}
-	return &vmmSchema.Result{Output: result}
 }
 
 func truthyParam(params map[string]string, keys ...string) bool {

@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -35,8 +34,6 @@ func main() {
 		err = cmdSeedClone(os.Args[2:])
 	case "export":
 		err = cmdExport(os.Args[2:])
-	case "import":
-		err = cmdImport(os.Args[2:])
 	case "pack-synthetic":
 		err = cmdPackSynthetic(os.Args[2:])
 	default:
@@ -56,7 +53,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: vmme2e <seed|seed-clone|export|import|pack-synthetic> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: vmme2e <seed|seed-clone|export|pack-synthetic> [flags]")
 	os.Exit(2)
 }
 
@@ -184,35 +181,6 @@ func cmdExport(args []string) error {
 		return err
 	}
 	fmt.Printf("exported module %s (%d public files)\n", out, len(res.Collection.Entries))
-	return nil
-}
-
-// import applies a module's public.zip into the target workspace via the real
-// capability.Import, printing the ImportResult and exiting non-zero on error.
-func cmdImport(args []string) error {
-	f := flagset(args)
-	ws, err := require(f, "workspace")
-	if err != nil {
-		return err
-	}
-	modFile, err := require(f, "module-file")
-	if err != nil {
-		return err
-	}
-	moduleBytes, err := os.ReadFile(modFile)
-	if err != nil {
-		return err
-	}
-	res, err := capability.Import(ws, moduleBytes, capability.ImportOptions{
-		OnConflict:     f["on-conflict"],
-		MaxBytes:       atoi64(f["max-bytes"], 0),
-		MaxModuleBytes: atoi64(f["max-module-bytes"], 0),
-	})
-	if err != nil {
-		return err
-	}
-	b, _ := json.Marshal(res)
-	fmt.Println(string(b))
 	return nil
 }
 
