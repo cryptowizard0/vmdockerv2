@@ -1,5 +1,5 @@
 // Command vmme2e is a thin end-to-end driver for the host-side capability
-// operations (seed / export / import) that are handled inside vmdocker.Apply and
+// operations (seed / export) that are handled inside vmdocker.Apply and
 // therefore cannot be reached by curling the container's /vmm. It wraps the real
 // production code (no new logic) so scripts/e2e_capability.sh can drive a
 // real-container round-trip and the hardening negative cases. See the plan:
@@ -97,17 +97,6 @@ func require(f map[string]string, key string) (string, error) {
 		return v, nil
 	}
 	return "", fmt.Errorf("missing required flag --%s", key)
-}
-
-func atoi64(s string, def int64) int64 {
-	if s == "" {
-		return def
-	}
-	var n int64
-	if _, err := fmt.Sscan(s, &n); err != nil {
-		return def
-	}
-	return n
 }
 
 // seed exercises the real spawn-time seeding of profile.toml into the workspace.
@@ -281,7 +270,7 @@ func zipDir(dir string) ([]byte, error) {
 }
 
 // stubImageArchive returns a small gzip payload standing in for image.tar.gz;
-// import never reads the image member, so any non-empty bytes suffice.
+// nothing in this driver reads the image member, so any non-empty bytes suffice.
 func stubImageArchive() []byte {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
