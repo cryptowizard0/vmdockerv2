@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	moduleFormat        = modulebuild.ModuleFormat
+	moduleFormat          = modulebuild.ModuleFormat
 	DefaultMaxBytes       = 64 << 20
 	DefaultMaxModuleBytes = 1 << 30
 )
@@ -185,23 +185,6 @@ func tagValue(tags []arSchema.Tag, name string) string {
 	return ""
 }
 
-func underAllowedRoot(rel string, roots []string) bool {
-	for _, root := range roots {
-		isDir := strings.HasSuffix(root, "/")
-		r := strings.Trim(path.Clean(root), "/")
-		if isDir {
-			if rel == r || strings.HasPrefix(rel, r+"/") {
-				return true
-			}
-			continue
-		}
-		if rel == r {
-			return true
-		}
-	}
-	return false
-}
-
 func applyPublicZip(home string, publicZip []byte, allowedRoots []string, opts ImportOptions) (ImportResult, error) {
 	max := opts.MaxBytes
 	if max == 0 {
@@ -214,6 +197,10 @@ func applyPublicZip(home string, publicZip []byte, allowedRoots []string, opts I
 	if err != nil {
 		return ImportResult{}, coded("CORRUPT", "open public.zip: %v", err)
 	}
+
+	// The target's own profile `public` entries are the import allowlist.
+	// Malformed entries are skipped (fail-closed: they allow nothing).
+	allowPatterns, _ := compilePublicPatterns(allowedRoots)
 
 	res := ImportResult{Public: append([]string(nil), allowedRoots...)}
 	type rollbackEntry struct {
@@ -247,7 +234,7 @@ func applyPublicZip(home string, publicZip []byte, allowedRoots []string, opts I
 			rollback()
 			return ImportResult{}, coded("PATH_ESCAPE", "zip entry %q escapes", zf.Name)
 		}
-		if !underAllowedRoot(rel, allowedRoots) {
+		if !matchesAnyPublic(rel, allowPatterns) {
 			rollback()
 			return ImportResult{}, coded("UNAUTHORIZED_PATH", "%q not under target public whitelist", rel)
 		}

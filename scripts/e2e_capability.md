@@ -90,7 +90,7 @@ ALL PASS
 ```
 build vmme2e
 └─ Part A（无 docker）
-   造 target workspace（profile.public=["skills/"], skills/a.md=orig）
+   造 target workspace（profile.public=["~/skills/*"], skills/a.md=orig）
    A1..A5：pack-synthetic 造模块 → vmme2e import → 校验不变量
 └─ Part B（有 docker 才跑）
    docker run -v <WS>:/home/hymx alpine sleep

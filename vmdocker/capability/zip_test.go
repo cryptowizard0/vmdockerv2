@@ -18,7 +18,7 @@ func TestBuildPublicZip_RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	zb, err := BuildPublicZip(home, []string{"skills/"})
+	zb, err := BuildPublicZip(home, []string{"~/skills/*"})
 	if err != nil {
 		t.Fatalf("BuildPublicZip: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestPreview_NoBuild(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, "skills", "a.md"), []byte("A"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	col, err := Preview(home, []string{"skills/"})
+	col, err := Preview(home, []string{"~/skills/*"})
 	if err != nil {
 		t.Fatal(err)
 	}
