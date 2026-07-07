@@ -31,6 +31,8 @@ func main() {
 	switch os.Args[1] {
 	case "seed":
 		err = cmdSeed(os.Args[2:])
+	case "seed-clone":
+		err = cmdSeedClone(os.Args[2:])
 	case "export":
 		err = cmdExport(os.Args[2:])
 	case "import":
@@ -54,7 +56,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: vmme2e <seed|export|import|pack-synthetic> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: vmme2e <seed|seed-clone|export|import|pack-synthetic> [flags]")
 	os.Exit(2)
 }
 
@@ -132,6 +134,30 @@ func cmdSeed(args []string) error {
 		return err
 	}
 	fmt.Printf("seeded %s\n", filepath.Join(ws, "profile.toml"))
+	return nil
+}
+
+// seed-clone exercises the real spawn-time seeding of profile.toml AND public.zip
+// into a fresh workspace. The module file must be resolvable relative to CWD
+// (mod/mod-<id>.json), matching resolveModuleFilePath in the runtime.
+func cmdSeedClone(args []string) error {
+	f := flagset(args)
+	id, err := require(f, "module-id")
+	if err != nil {
+		return err
+	}
+	ws, err := require(f, "workspace")
+	if err != nil {
+		return err
+	}
+	format := f["archive-format"]
+	if format == "" {
+		format = runtimeSchema.ImageArchiveContainerTarGZ
+	}
+	if err := vmdocker.SeedWorkspaceFromModule(id, ws, format); err != nil {
+		return err
+	}
+	fmt.Printf("seeded clone workspace %s\n", ws)
 	return nil
 }
 
