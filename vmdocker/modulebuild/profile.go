@@ -27,7 +27,11 @@ type DockerfileSection struct {
 
 // VmdockerSection maps to [vmdocker]; consumed by runtime Export/Import (P4).
 type VmdockerSection struct {
-	Public []string `toml:"public"` // exportable path allowlist
+	// Public is the exportable path allowlist. Each entry MUST start with "~/"
+	// and is a HOME-relative glob: '*' matches any characters including '/'
+	// (recursive), '?' matches one character. Examples:
+	//   public = ["~/skills/*", "~/persona/*.md", "~/investment.md"]
+	Public []string `toml:"public"`
 }
 
 // ParseProfile parses profile.toml bytes and validates required fields.

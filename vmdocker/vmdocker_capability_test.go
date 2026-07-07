@@ -23,7 +23,7 @@ func TestApplyExportDryRunPreview(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "profile.toml"), []byte("[dockerfile]\nFROM=\"openclaw\"\n[vmdocker]\npublic=[\"skills/\"]\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "profile.toml"), []byte("[dockerfile]\nFROM=\"openclaw\"\n[vmdocker]\npublic=[\"~/skills/*\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(home, "skills", "a.md"), []byte("A"), 0o644); err != nil {
@@ -62,7 +62,7 @@ func TestApplyImportHostSide(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "profile.toml"), []byte("[dockerfile]\nFROM=\"openclaw\"\n[vmdocker]\npublic=[\"skills/\"]\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "profile.toml"), []byte("[dockerfile]\nFROM=\"openclaw\"\n[vmdocker]\npublic=[\"~/skills/*\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	vm := &VmDocker{
@@ -118,7 +118,7 @@ func buildCapabilityTestModule(t *testing.T, files map[string]string) []byte {
 			t.Fatal(err)
 		}
 	}
-	writeM("profile.toml", []byte("[vmdocker]\npublic=[\"skills/\"]\n"))
+	writeM("profile.toml", []byte("[vmdocker]\npublic=[\"~/skills/*\"]\n"))
 	writeM("public.zip", zipBuf.Bytes())
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)

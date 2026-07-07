@@ -67,7 +67,7 @@ func TestApplyPublicZip_WhitelistAndConflict(t *testing.T) {
 		"skills/keep.md": "overwritten",
 	})
 
-	res, err := applyPublicZip(home, zb, []string{"skills/"}, ImportOptions{OnConflict: "skip"})
+	res, err := applyPublicZip(home, zb, []string{"~/skills/*"}, ImportOptions{OnConflict: "skip"})
 	if err != nil {
 		t.Fatalf("applyPublicZip: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestApplyPublicZip_WhitelistAndConflict(t *testing.T) {
 func TestApplyPublicZip_RejectsOutsideWhitelist(t *testing.T) {
 	home := t.TempDir()
 	zb := makeZip(t, map[string]string{"private/secret": "x"})
-	_, err := applyPublicZip(home, zb, []string{"skills/"}, ImportOptions{OnConflict: "skip"})
+	_, err := applyPublicZip(home, zb, []string{"~/skills/*"}, ImportOptions{OnConflict: "skip"})
 	if err == nil {
 		t.Fatal("expected UNAUTHORIZED_PATH for path outside target public whitelist")
 	}
@@ -94,7 +94,7 @@ func TestApplyPublicZip_RejectsOutsideWhitelist(t *testing.T) {
 func TestApplyPublicZip_RejectsTraversal(t *testing.T) {
 	home := t.TempDir()
 	zb := makeZip(t, map[string]string{"skills/../../etc/x": "x"})
-	_, err := applyPublicZip(home, zb, []string{"skills/"}, ImportOptions{OnConflict: "skip"})
+	_, err := applyPublicZip(home, zb, []string{"~/skills/*"}, ImportOptions{OnConflict: "skip"})
 	if err == nil {
 		t.Fatal("expected error for path traversal")
 	}
@@ -103,7 +103,7 @@ func TestApplyPublicZip_RejectsTraversal(t *testing.T) {
 func TestApplyPublicZip_AllowsWhitelistedFile(t *testing.T) {
 	home := t.TempDir()
 	zb := makeZip(t, map[string]string{"note.md": "N"})
-	res, err := applyPublicZip(home, zb, []string{"note.md"}, ImportOptions{OnConflict: "skip"})
+	res, err := applyPublicZip(home, zb, []string{"~/note.md"}, ImportOptions{OnConflict: "skip"})
 	if err != nil {
 		t.Fatalf("applyPublicZip: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestApplyPublicZip_AllowsWhitelistedFile(t *testing.T) {
 func TestApplyPublicZip_RejectsFileOutsideWhitelist(t *testing.T) {
 	home := t.TempDir()
 	zb := makeZip(t, map[string]string{"note.md": "N"})
-	_, err := applyPublicZip(home, zb, []string{"skills/"}, ImportOptions{OnConflict: "skip"})
+	_, err := applyPublicZip(home, zb, []string{"~/skills/*"}, ImportOptions{OnConflict: "skip"})
 	if err == nil {
 		t.Fatal("expected UNAUTHORIZED_PATH for file not covered by any public entry")
 	}
@@ -137,7 +137,7 @@ func TestApplyPublicZip_OverwriteRollbackRestoresOriginal(t *testing.T) {
 		struct{ name, body string }{"skills/keep.md", "new"},
 		struct{ name, body string }{"private/secret", "x"},
 	)
-	_, err := applyPublicZip(home, zb, []string{"skills/"}, ImportOptions{OnConflict: "overwrite"})
+	_, err := applyPublicZip(home, zb, []string{"~/skills/*"}, ImportOptions{OnConflict: "overwrite"})
 	if err == nil {
 		t.Fatal("expected unauthorized path error")
 	}
@@ -154,7 +154,7 @@ func TestApplyPublicZip_RejectsExpandedContentOverLimit(t *testing.T) {
 		t.Fatalf("test zip compressed size = %d, want <= 4096", len(zb))
 	}
 
-	_, err := applyPublicZip(home, zb, []string{"skills/"}, ImportOptions{
+	_, err := applyPublicZip(home, zb, []string{"~/skills/*"}, ImportOptions{
 		OnConflict: "skip",
 		MaxBytes:   4096,
 	})
@@ -167,7 +167,7 @@ func TestApplyPublicZip_RejectsExpandedContentOverLimit(t *testing.T) {
 }
 
 func buildTestModule(t *testing.T, publicZip []byte, format string) []byte {
-	return buildTestModuleWithProfile(t, publicZip, format, []byte("[vmdocker]\npublic=[\"skills/\"]\n"))
+	return buildTestModuleWithProfile(t, publicZip, format, []byte("[vmdocker]\npublic=[\"~/skills/*\"]\n"))
 }
 
 func buildTestModuleWithProfile(t *testing.T, publicZip []byte, format string, profile []byte) []byte {
@@ -213,7 +213,7 @@ func TestImport_HappyPath(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "profile.toml"), []byte("[vmdocker]\npublic=[\"skills/\"]\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "profile.toml"), []byte("[vmdocker]\npublic=[\"~/skills/*\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -235,14 +235,14 @@ func TestImport_HappyPath(t *testing.T) {
 
 func TestImport_DoesNotOverwriteTargetProfile(t *testing.T) {
 	home := t.TempDir()
-	targetProfile := []byte("[vmdocker]\npublic=[\"skills/\"]\n")
+	targetProfile := []byte("[vmdocker]\npublic=[\"~/skills/*\"]\n")
 	if err := os.MkdirAll(filepath.Join(home, "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(home, "profile.toml"), targetProfile, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	moduleProfile := []byte("[vmdocker]\npublic=[\"skills/\",\"private/\"]\n")
+	moduleProfile := []byte("[vmdocker]\npublic=[\"~/skills/*\",\"~/private/*\"]\n")
 	moduleBytes := buildTestModuleWithProfile(t, makeZip(t, map[string]string{"skills/x.md": "X"}), moduleFormat, moduleProfile)
 
 	res, err := Import(home, moduleBytes, ImportOptions{OnConflict: "overwrite"})
@@ -262,7 +262,7 @@ func TestImport_RejectsModuleMemberOverLimit(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, "profile.toml"), []byte("[vmdocker]\npublic=[\"skills/\"]\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "profile.toml"), []byte("[vmdocker]\npublic=[\"~/skills/*\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	moduleProfile := []byte(strings.Repeat("x", 8192))
@@ -276,7 +276,7 @@ func TestImport_RejectsModuleMemberOverLimit(t *testing.T) {
 
 func TestImport_FormatMismatch(t *testing.T) {
 	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, "profile.toml"), []byte("[vmdocker]\npublic=[\"skills/\"]\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, "profile.toml"), []byte("[vmdocker]\npublic=[\"~/skills/*\"]\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	moduleBytes := buildTestModule(t, makeZip(t, map[string]string{"skills/x.md": "X"}), "wrong")
