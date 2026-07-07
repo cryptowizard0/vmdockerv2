@@ -194,8 +194,8 @@ func (v *VmDocker) Run(cuAddr string, data []byte, tags []goarSchema.Tag) error 
 		return err
 	}
 	v.instanceInfo = instanceInfo
-	if err := seedWorkspaceProfileFromModule(v.Env.Process.Module, instanceInfo.Workspace, runtimeSpec.Image.ArchiveFormat); err != nil {
-		log.Error("seed workspace profile failed", "pid", v.pid, "module", v.Env.Process.Module, "workspace", instanceInfo.Workspace, "err", err)
+	if err := seedWorkspaceFromModule(v.Env.Process.Module, instanceInfo.Workspace, runtimeSpec.Image.ArchiveFormat); err != nil {
+		log.Error("seed workspace from module failed", "pid", v.pid, "module", v.Env.Process.Module, "workspace", instanceInfo.Workspace, "err", err)
 		return err
 	}
 	log.Info("runtime instance created", "pid", v.pid, "port", instanceInfo.Port, "runtime_id", instanceInfo.ID, "backend", instanceInfo.Backend)
