@@ -45,6 +45,16 @@ func compilePublicPatterns(public []string) ([]publicPattern, []string) {
 			warnings = append(warnings, fmt.Sprintf("public entry %q must not contain \"..\"", entry))
 			continue
 		}
+		isGlob := strings.ContainsAny(rel, "*?")
+		if isGlob && literalBaseDir(rel) == "" {
+			// A glob in the first segment (e.g. "~/*", "~/*.md") matches from
+			// HOME root recursively, sweeping in hidden/dot files (.ssh,
+			// .bashrc, ...). Reject it — too broad to be intentional. The entry
+			// is skipped (fail-closed: it allows nothing); scope it to a
+			// subdirectory instead.
+			warnings = append(warnings, fmt.Sprintf("public entry %q rejected: a HOME-root-level glob matches all of HOME including hidden files; scope it to a subdirectory (e.g. \"~/skills/*\")", entry))
+			continue
+		}
 		re, err := globToRegexp(rel)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("public entry %q is not a valid pattern: %v", entry, err))
@@ -53,7 +63,7 @@ func compilePublicPatterns(public []string) ([]publicPattern, []string) {
 		pats = append(pats, publicPattern{
 			Raw:    entry,
 			Rel:    rel,
-			IsGlob: strings.ContainsAny(rel, "*?"),
+			IsGlob: isGlob,
 			re:     re,
 		})
 	}

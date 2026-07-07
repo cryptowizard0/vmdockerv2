@@ -27,6 +27,31 @@ func TestCompilePublicPatterns_RejectsDotDotAndEmpty(t *testing.T) {
 	}
 }
 
+func TestCompilePublicPatterns_RejectsHomeRootGlob(t *testing.T) {
+	// Root-level globs are rejected outright (fail-closed), not honored.
+	pats, warns := compilePublicPatterns([]string{"~/*", "~/*.md", "~/skills/*"})
+	if len(pats) != 1 || pats[0].Rel != "skills/*" {
+		t.Fatalf("only the scoped glob should survive, got %+v", pats)
+	}
+	if len(warns) != 2 {
+		t.Fatalf("want a rejection warning per root-level glob, got %d (%v)", len(warns), warns)
+	}
+	// Root-level exact files (no glob) are still fine.
+	pats2, warns2 := compilePublicPatterns([]string{"~/investment.md"})
+	if len(pats2) != 1 || len(warns2) != 0 {
+		t.Fatalf("root-level exact file must be honored without warning, pats=%+v warns=%v", pats2, warns2)
+	}
+}
+
+func TestMatchesAnyPublic_RejectedRootGlobAllowsNothing(t *testing.T) {
+	// Fail-closed: a profile whose only entry is a rejected root glob must
+	// allow no paths at all (critical for the import allowlist).
+	pats, _ := compilePublicPatterns([]string{"~/*"})
+	if matchesAnyPublic("skills/a.md", pats) || matchesAnyPublic(".ssh/id_rsa", pats) {
+		t.Fatal("rejected root glob must allow nothing")
+	}
+}
+
 func TestPublicPattern_Matching(t *testing.T) {
 	pats, _ := compilePublicPatterns([]string{
 		"~/skills/*",
