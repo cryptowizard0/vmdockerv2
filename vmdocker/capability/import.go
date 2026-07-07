@@ -21,21 +21,8 @@ import (
 
 const (
 	moduleFormat          = modulebuild.ModuleFormat
-	DefaultMaxBytes       = 64 << 20
 	DefaultMaxModuleBytes = 1 << 30
 )
-
-// CodedError carries a stable error code for Apply(Result.Error).
-type CodedError struct {
-	Code string
-	Err  error
-}
-
-func (e *CodedError) Error() string { return e.Code + ": " + e.Err.Error() }
-
-func coded(code, format string, a ...any) error {
-	return &CodedError{Code: code, Err: fmt.Errorf(format, a...)}
-}
 
 // ImportOptions controls conflict handling and size limits.
 type ImportOptions struct {
@@ -174,15 +161,6 @@ func discardLimited(r io.Reader, declaredSize, max int64) error {
 		return coded("TOO_LARGE", "payload %d bytes exceeds %d", n, max)
 	}
 	return nil
-}
-
-func tagValue(tags []arSchema.Tag, name string) string {
-	for _, tag := range tags {
-		if tag.Name == name {
-			return tag.Value
-		}
-	}
-	return ""
 }
 
 func applyPublicZip(home string, publicZip []byte, allowedRoots []string, opts ImportOptions) (ImportResult, error) {
