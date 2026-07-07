@@ -18,6 +18,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/cryptowizard0/vmdockerv2/vmdocker/capability"
 	runtimeSchema "github.com/cryptowizard0/vmdockerv2/vmdocker/runtimemanager/schema"
 )
 
@@ -536,4 +537,75 @@ func readExactBytes(reader *bufio.Reader, n int) ([]byte, error) {
 		return nil, err
 	}
 	return buf, nil
+}
+
+// SeedWorkspaceFromModule exposes seedWorkspaceFromModule for out-of-package
+// tooling (the e2e driver). It resolves the module file relative to the current
+// working directory, like the runtime spawn path.
+func SeedWorkspaceFromModule(moduleID, workspace, archiveFormat string) error {
+	return seedWorkspaceFromModule(moduleID, workspace, archiveFormat)
+}
+
+// seedWorkspaceFromModule writes the module's profile.toml into workspace and,
+// if the module carries a public.zip member, unpacks it into workspace — both in
+// a single pass over the container tar. It is the spawn-time seed for a freshly
+// created (empty) workspace. A missing public.zip member is a no-op (build-flow
+// modules have none); a non-container-tar archive format is a no-op.
+func seedWorkspaceFromModule(moduleID, workspace, archiveFormat string) error {
+	if archiveFormat != runtimeSchema.ImageArchiveContainerTarGZ {
+		return nil
+	}
+	payload, err := openModulePayloadGzip(moduleID)
+	if err != nil {
+		return fmt.Errorf("read module %s payload stream failed: %w", moduleID, err)
+	}
+	defer payload.Close()
+
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		return err
+	}
+
+	tr := tar.NewReader(payload)
+	seededProfile := false
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read module container tar: %w", err)
+		}
+		switch hdr.Name {
+		case "profile.toml":
+			if hdr.Size > 1<<20 {
+				return fmt.Errorf("profile.toml member %d bytes exceeds %d", hdr.Size, 1<<20)
+			}
+			data, err := io.ReadAll(io.LimitReader(tr, 1<<20))
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(workspace, "profile.toml"), data, 0o644); err != nil {
+				return err
+			}
+			seededProfile = true
+		case "public.zip":
+			if hdr.Size > maxModuleMemberBytes {
+				return fmt.Errorf("public.zip member %d bytes exceeds %d", hdr.Size, maxModuleMemberBytes)
+			}
+			data, err := io.ReadAll(io.LimitReader(tr, maxModuleMemberBytes+1))
+			if err != nil {
+				return err
+			}
+			if int64(len(data)) > maxModuleMemberBytes {
+				return fmt.Errorf("public.zip member exceeds %d bytes", maxModuleMemberBytes)
+			}
+			if err := capability.UnpackPublicZip(workspace, data); err != nil {
+				return err
+			}
+		}
+	}
+	if !seededProfile {
+		return fmt.Errorf("profile.toml member not found in module container tar")
+	}
+	return nil
 }
