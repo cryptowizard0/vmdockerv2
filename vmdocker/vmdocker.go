@@ -194,6 +194,19 @@ func (v *VmDocker) Run(cuAddr string, data []byte, tags []goarSchema.Tag) error 
 		return err
 	}
 	v.instanceInfo = instanceInfo
+
+	// The instance now holds a container + allocated port. Any failure below
+	// (seed, start, readiness, spawn) must tear it down, otherwise the container
+	// and port leak — Spawn discards this VmDocker on error and never calls
+	// RemoveInstance. Mirrors the restore path's rollback guard.
+	spawnFailed := true
+	defer func() {
+		if spawnFailed && v.instanceInfo != nil {
+			_ = runtimeManager.RemoveInstance(ctx, v.pid)
+			v.instanceInfo = nil
+		}
+	}()
+
 	if err := seedWorkspaceFromModule(v.Env.Process.Module, instanceInfo.Workspace, runtimeSpec.Image.ArchiveFormat); err != nil {
 		log.Error("seed workspace from module failed", "pid", v.pid, "module", v.Env.Process.Module, "workspace", instanceInfo.Workspace, "err", err)
 		return err
@@ -233,6 +246,7 @@ func (v *VmDocker) Run(cuAddr string, data []byte, tags []goarSchema.Tag) error 
 		return err
 	}
 	log.Info("runtime spawn request completed", "pid", v.pid, "runtime_id", instanceInfo.ID)
+	spawnFailed = false
 	return nil
 }
 

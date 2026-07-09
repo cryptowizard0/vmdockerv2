@@ -29,9 +29,30 @@ func hasSecurityOption(opts []string, name string) bool {
 	return false
 }
 
+// seccompEffective reports whether the daemon's default seccomp profile will
+// actually confine containers. Docker's Info reports the seccomp entry as
+// "name=seccomp,profile=<profile>". A profile of "unconfined" means seccomp is
+// disabled for every container launched without an explicit per-container
+// profile — which vmdocker never sets — so it must NOT count as confined.
+// Matching only "name=seccomp" (as hasSecurityOption does) would fail open here.
+func seccompEffective(opts []string) bool {
+	for _, o := range opts {
+		if !strings.Contains(o, "name=seccomp") {
+			continue
+		}
+		return !strings.Contains(o, "profile=unconfined")
+	}
+	return false
+}
+
 // RunNodeConfinementCheck inspects the local Docker daemon once and reports
 // whether the confinement the host config requests will take effect. It returns
 // an error if any refuse-severity check fails (in strict mode, warn fails too).
+//
+// The two error modes are distinguishable by the report: a nil report means the
+// daemon was unreachable (a transient failure the caller may retry), while a
+// non-nil report with an error means the confinement verdict itself failed (a
+// persistent misconfiguration the caller may cache).
 func RunNodeConfinementCheck(ctx context.Context, cli infoClient, strict bool) ([]CheckResult, error) {
 	info, err := cli.Info(ctx)
 	if err != nil {
@@ -41,8 +62,8 @@ func RunNodeConfinementCheck(ctx context.Context, cli infoClient, strict bool) (
 	report := []CheckResult{
 		{Name: "daemon-version", OK: info.ServerVersion != "", Severity: "refuse",
 			Detail: "ServerVersion=" + info.ServerVersion},
-		{Name: "seccomp", OK: hasSecurityOption(info.SecurityOptions, "seccomp"), Severity: "refuse",
-			Detail: "seccomp default profile"},
+		{Name: "seccomp", OK: seccompEffective(info.SecurityOptions), Severity: "refuse",
+			Detail: "seccomp default profile (not unconfined)"},
 		{Name: "memory-limit", OK: info.MemoryLimit, Severity: "refuse",
 			Detail: "HostConfig.Memory enforceable"},
 		{Name: "swap-limit", OK: info.SwapLimit, Severity: "warn",

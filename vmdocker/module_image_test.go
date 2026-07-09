@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cryptowizard0/vmdockerv2/vmdocker/capability"
 	runtimeSchema "github.com/cryptowizard0/vmdockerv2/vmdocker/runtimemanager/schema"
 	goarSchema "github.com/permadao/goar/schema"
 	goarUtils "github.com/permadao/goar/utils"
@@ -593,6 +594,34 @@ func TestSeedWorkspaceFromModule_NoPublicIsNoop(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ws, "skills")); !os.IsNotExist(err) {
 		t.Fatalf("expected no public content, stat err = %v", err)
+	}
+}
+
+func TestSeedWorkspaceFromModule_PublicTooLargeRejected(t *testing.T) {
+	const moduleID = "module-public-huge"
+	chdirToTempModuleDir(t)
+
+	// Craft a container tar whose public.zip member *declares* a size past the
+	// unpack limit, with no body. seedWorkspaceFromModule must reject on the
+	// declared size — before buffering the member into host memory — rather than
+	// reading up to the 1 GiB image-member limit first.
+	var container bytes.Buffer
+	tw := tar.NewWriter(&container)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "public.zip", Mode: 0o644, Size: capability.DefaultMaxBytes + 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeModulePayload(moduleID, container.Bytes(), false, false); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+
+	err := seedWorkspaceFromModule(moduleID, t.TempDir(), runtimeSchema.ImageArchiveContainerTarGZ)
+	if err == nil {
+		t.Fatal("oversized public.zip member must be rejected")
+	}
+	if !strings.Contains(err.Error(), "public.zip member") {
+		t.Fatalf("expected public.zip size rejection, got: %v", err)
 	}
 }
 

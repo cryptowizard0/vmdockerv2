@@ -589,15 +589,21 @@ func seedWorkspaceFromModule(moduleID, workspace, archiveFormat string) error {
 			}
 			seededProfile = true
 		case "public.zip":
-			if hdr.Size > maxModuleMemberBytes {
-				return fmt.Errorf("public.zip member %d bytes exceeds %d", hdr.Size, maxModuleMemberBytes)
+			// public.zip is fully buffered into memory here, so bound it by the
+			// same limit UnpackPublicZip enforces (DefaultMaxBytes, 64 MiB) rather
+			// than the 1 GiB image-member limit. Otherwise a hostile module could
+			// force the host to buffer up to 1 GiB before unpack rejects it — a
+			// memory-pressure vector. The LimitReader caps the read even when a
+			// crafted tar header understates hdr.Size.
+			if hdr.Size > capability.DefaultMaxBytes {
+				return fmt.Errorf("public.zip member %d bytes exceeds %d", hdr.Size, capability.DefaultMaxBytes)
 			}
-			data, err := io.ReadAll(io.LimitReader(tr, maxModuleMemberBytes+1))
+			data, err := io.ReadAll(io.LimitReader(tr, capability.DefaultMaxBytes+1))
 			if err != nil {
 				return err
 			}
-			if int64(len(data)) > maxModuleMemberBytes {
-				return fmt.Errorf("public.zip member exceeds %d bytes", maxModuleMemberBytes)
+			if int64(len(data)) > capability.DefaultMaxBytes {
+				return fmt.Errorf("public.zip member exceeds %d bytes", capability.DefaultMaxBytes)
 			}
 			if err := capability.UnpackPublicZip(workspace, data); err != nil {
 				return err

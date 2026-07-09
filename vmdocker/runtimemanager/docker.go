@@ -28,7 +28,8 @@ type DockerManager struct {
 	instances     map[string]*schema.InstanceInfo
 	mutex         sync.RWMutex
 	portAllocator *portAllocator
-	nodeCheckOnce sync.Once
+	nodeCheckMu   sync.Mutex
+	nodeChecked   bool
 	nodeCheckErr  error
 }
 
@@ -113,15 +114,40 @@ func (dm *DockerManager) verifyImageSHA(ctx context.Context, imageInfo schema.Im
 		imageInfo.Name, imageInfo.SHA, inspect.RepoDigests, inspect.ID)
 }
 
-func (dm *DockerManager) CreateInstance(ctx context.Context, pid string, runtimeSpec schema.RuntimeSpec, runtimeEnv []string) (*schema.InstanceInfo, error) {
-	dm.nodeCheckOnce.Do(func() {
+func (dm *DockerManager) ensureNodeConfinement() error {
+	return dm.checkNodeConfinement(dm.cli)
+}
+
+// checkNodeConfinement runs the node confinement check at most once per
+// successful verdict. A transient daemon-unreachable failure (nil report) is
+// NOT cached, so a momentary Docker hiccup on the first spawn does not
+// permanently latch every later spawn to failure; the check is retried on the
+// next call until a real verdict (pass or misconfiguration) is reached.
+func (dm *DockerManager) checkNodeConfinement(cli infoClient) error {
+	dm.nodeCheckMu.Lock()
+	defer dm.nodeCheckMu.Unlock()
+
+	if !dm.nodeChecked {
 		strict := os.Getenv("VMDOCKER_NODE_CHECK_STRICT") == "1"
 		checkCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, dm.nodeCheckErr = RunNodeConfinementCheck(checkCtx, dm.cli, strict)
-	})
+		report, err := RunNodeConfinementCheck(checkCtx, cli, strict)
+		if err != nil && report == nil {
+			// Daemon unreachable: transient. Do not latch; retry next spawn.
+			return fmt.Errorf("node confinement check failed: %w", err)
+		}
+		dm.nodeChecked = true
+		dm.nodeCheckErr = err
+	}
 	if dm.nodeCheckErr != nil {
-		return nil, fmt.Errorf("node confinement check failed: %w", dm.nodeCheckErr)
+		return fmt.Errorf("node confinement check failed: %w", dm.nodeCheckErr)
+	}
+	return nil
+}
+
+func (dm *DockerManager) CreateInstance(ctx context.Context, pid string, runtimeSpec schema.RuntimeSpec, runtimeEnv []string) (*schema.InstanceInfo, error) {
+	if err := dm.ensureNodeConfinement(); err != nil {
+		return nil, err
 	}
 
 	dm.mutex.Lock()

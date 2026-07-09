@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cryptowizard0/vmdockerv2/vmdocker/modulebuild"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -41,6 +42,16 @@ func Export(ctx context.Context, home string, opts ExportOptions) (ExportResult,
 	profile, err := modulebuild.ParseProfile(profileTOML)
 	if err != nil {
 		return ExportResult{}, err
+	}
+	// Fail fast on malformed public entries. compilePublicPatterns warn-and-skips
+	// bad entries — a fail-closed property the import allowlist depends on — but
+	// for a mutating export that silently drops the author's declared files (e.g.
+	// entries still in the pre-"~/" legacy format), producing a "successful"
+	// module with an empty public.zip. Preview/dry_run stays lenient so authors
+	// can iterate; only the artifact-producing path is strict.
+	if _, rejected := compilePublicPatterns(profile.Vmdocker.Public); len(rejected) > 0 {
+		return ExportResult{}, fmt.Errorf("profile has %d invalid public entry(ies); fix them before export: %s",
+			len(rejected), strings.Join(rejected, "; "))
 	}
 	col, err := CollectPublic(home, profile.Vmdocker.Public)
 	if err != nil {
