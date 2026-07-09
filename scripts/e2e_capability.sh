@@ -8,6 +8,9 @@
 #   Go unit tests in vmdocker/capability/zip_test.go.
 # Part B (needs docker): bind-mount the seeded workspace at /home/hymx and assert
 #   the seeded public content is visible inside a real container (P3 mount).
+# Part C (opt-in, RUN_REAL_SPAWN=1): real docker build + real in-process spawn via
+#   the build-tagged Go test vmdocker/realspawn_e2e_test.go; skips cleanly unless
+#   docker + a pullable base image + the adapter binary are all available.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -68,6 +71,26 @@ else
     else
       bad "B1 mount: seeded public content not visible in container"
     fi
+  fi
+fi
+
+###############################################################################
+echo "== Part C: real build + real spawn (opt-in: RUN_REAL_SPAWN=1) =="
+###############################################################################
+if [ "${RUN_REAL_SPAWN:-}" != "1" ]; then
+  echo "[SKIP] Part C disabled — set RUN_REAL_SPAWN=1 to run the real build+spawn test"
+else
+  cout="${WORKDIR}/partc.out"
+  if go test -tags e2e_realspawn ./vmdocker/ -run TestRealBuildSpawn -v -count=1 >"${cout}" 2>&1; then
+    if grep -q '^--- SKIP' "${cout}"; then
+      echo "[SKIP] C1 real build+spawn — preconditions unmet:"
+      grep 'realspawn_e2e_test.go' "${cout}" | head -3
+    else
+      ok "C1 real build+spawn: real module built, real container spawned, public content present"
+    fi
+  else
+    bad "C1 real build+spawn FAILED"
+    tail -30 "${cout}"
   fi
 fi
 
