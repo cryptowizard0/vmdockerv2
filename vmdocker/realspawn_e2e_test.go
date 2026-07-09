@@ -53,7 +53,8 @@ func TestRealBuildSpawn(t *testing.T) {
 	}
 
 	// --- isolate CWD: mod/<id>.json and sandbox_workspace/<pid> resolve here ---
-	t.Chdir(t.TempDir())
+	runDir := t.TempDir()
+	t.Chdir(runDir)
 	if err := os.MkdirAll("mod", 0o755); err != nil {
 		t.Fatalf("mkdir mod: %v", err)
 	}
@@ -107,15 +108,19 @@ func TestRealBuildSpawn(t *testing.T) {
 	t.Cleanup(func() { _ = vm.Close() })
 
 	// --- assert: the spawned agent's HOME carries the module's public content ---
-	out, err := run(ctx, "docker", "exec", container, "cat", "/home/hymx/skills/soul.md")
+	// Read it host-side from the bind-mounted per-pid workspace — backend-agnostic
+	// (works for both the Docker and Docker Sandbox backends; a plain `docker exec`
+	// would not, since the Sandbox backend uses a truncated name + `docker sandbox exec`).
+	seeded := filepath.Join(runDir, "sandbox_workspace", pid, "skills", "soul.md")
+	b, err := os.ReadFile(seeded)
 	if err != nil {
 		dumpAdapterLogs(t, container)
-		t.Fatalf("read seeded public file inside container: %v\n%s", err, out)
+		t.Fatalf("read seeded public file (host workspace %s): %v", seeded, err)
 	}
-	if got := strings.TrimSpace(out); got != realSpawnMarker {
+	if got := strings.TrimSpace(string(b)); got != realSpawnMarker {
 		t.Fatalf("public content in spawned agent = %q, want %q", got, realSpawnMarker)
 	}
-	t.Logf("real build + spawn OK: %s carries /home/hymx/skills/soul.md == %q", container, realSpawnMarker)
+	t.Logf("real build + spawn OK: pid %s served /vmm/health 200 and carries skills/soul.md == %q", pid, realSpawnMarker)
 }
 
 // writeRealSpawnFixture lays out a minimal buildable profile whose public
