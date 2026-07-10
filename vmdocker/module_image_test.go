@@ -635,3 +635,37 @@ func TestSeedWorkspaceFromModule_OldFormatIsNoop(t *testing.T) {
 		t.Fatalf("expected empty workspace for old format, got %d entries", len(entries))
 	}
 }
+
+func TestPersistModuleToStore(t *testing.T) {
+	t.Chdir(t.TempDir())
+	raw, err := json.Marshal(goarSchema.BundleItem{Id: "TESTID123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := persistModuleToStore(raw)
+	if err != nil {
+		t.Fatalf("persistModuleToStore: %v", err)
+	}
+	if id != "TESTID123" {
+		t.Fatalf("id = %q, want TESTID123", id)
+	}
+	got, err := os.ReadFile(filepath.Join("mod", "mod-TESTID123.json"))
+	if err != nil {
+		t.Fatalf("module not written to store: %v", err)
+	}
+	if !bytes.Equal(got, raw) {
+		t.Fatal("stored bytes differ from input")
+	}
+	// What we write must be exactly what the node loads back.
+	if _, err := resolveModuleFilePath("TESTID123"); err != nil {
+		t.Fatalf("resolveModuleFilePath after persist: %v", err)
+	}
+}
+
+func TestPersistModuleToStore_EmptyIdRejected(t *testing.T) {
+	t.Chdir(t.TempDir())
+	raw, _ := json.Marshal(goarSchema.BundleItem{})
+	if _, err := persistModuleToStore(raw); err == nil {
+		t.Fatal("expected error for empty module id")
+	}
+}

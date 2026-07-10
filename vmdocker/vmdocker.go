@@ -22,7 +22,6 @@ import (
 	"github.com/hymatrix/hymx/common"
 	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
 	goarSchema "github.com/permadao/goar/schema"
-	arutils "github.com/permadao/goar/utils"
 )
 
 var log = common.NewLog("vmdocker")
@@ -732,9 +731,16 @@ func (v *VmDocker) applyCapabilityExport(meta vmmSchema.Meta) *vmmSchema.Result 
 	if err != nil {
 		return &vmmSchema.Result{Error: err}
 	}
+	// The exported module embeds the full container image (hundreds of MB).
+	// Persist it to the node's module store and return only its id — routing the
+	// bytes through the result/redis channel exceeds proto-max-bulk-len.
+	moduleID, err := persistModuleToStore(exported.ModuleBytes)
+	if err != nil {
+		return &vmmSchema.Result{Error: err}
+	}
 	return &vmmSchema.Result{
 		Output: exported.Collection,
-		Data:   arutils.Base64Encode(exported.ModuleBytes),
+		Data:   moduleID,
 	}
 }
 

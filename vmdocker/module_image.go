@@ -20,6 +20,7 @@ import (
 
 	"github.com/cryptowizard0/vmdockerv2/vmdocker/capability"
 	runtimeSchema "github.com/cryptowizard0/vmdockerv2/vmdocker/runtimemanager/schema"
+	goarSchema "github.com/permadao/goar/schema"
 )
 
 var dockerLookPath = exec.LookPath
@@ -247,6 +248,30 @@ func readModuleImageArchive(moduleID, archiveFormat string) ([]byte, error) {
 	}
 	defer rc.Close()
 	return io.ReadAll(rc)
+}
+
+// persistModuleToStore parses the exported module's BundleItem id and writes the
+// full module JSON into the node's module store (mod/mod-<id>.json — the path
+// resolveModuleFilePath loads from), returning the id. Export uses this instead
+// of returning the module bytes through the result channel: the module embeds
+// the full container image (hundreds of MB) and would blow past redis's
+// proto-max-bulk-len if routed as a message result.
+func persistModuleToStore(moduleBytes []byte) (string, error) {
+	var item goarSchema.BundleItem
+	if err := json.Unmarshal(moduleBytes, &item); err != nil {
+		return "", fmt.Errorf("parse exported module: %w", err)
+	}
+	if item.Id == "" {
+		return "", fmt.Errorf("exported module has empty id")
+	}
+	path := moduleFilePath(item.Id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, moduleBytes, 0o644); err != nil {
+		return "", fmt.Errorf("write module %s: %w", item.Id, err)
+	}
+	return item.Id, nil
 }
 
 func extractMemberFromContainerTar(r io.Reader, memberName string, maxBytes int64) (io.ReadCloser, error) {
