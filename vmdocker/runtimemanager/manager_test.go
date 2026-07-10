@@ -276,7 +276,7 @@ func TestBuildDockerContainerConfigEnforcesRuntimeUserAndParsedCommand(t *testin
 }
 
 func TestBuildDockerHostConfigIncludesWorkspaceMount(t *testing.T) {
-	hostConfig := buildDockerHostConfig(18080, "/tmp/runtime-workspace/pid-1")
+	hostConfig := buildDockerHostConfig(18080, "/tmp/runtime-workspace/pid-1", "/tmp/runtime-workspace/pid-1-tmp")
 	if assert.NotNil(t, hostConfig) {
 		assert.True(t, hostConfig.ReadonlyRootfs)
 		bindings := hostConfig.PortBindings[nat.Port(schema.ExprotPort)]
@@ -288,6 +288,11 @@ func TestBuildDockerHostConfigIncludesWorkspaceMount(t *testing.T) {
 			Type:   mount.TypeBind,
 			Source: "/tmp/runtime-workspace/pid-1",
 			Target: containerHome,
+		})
+		assert.Contains(t, hostConfig.Mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: "/tmp/runtime-workspace/pid-1-tmp",
+			Target: containerTmp,
 		})
 	}
 }

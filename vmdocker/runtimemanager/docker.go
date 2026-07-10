@@ -169,13 +169,19 @@ func (dm *DockerManager) CreateInstance(ctx context.Context, pid string, runtime
 		return nil, err
 	}
 
+	tmpDir, err := ensureRuntimeTmpDir(workspace)
+	if err != nil {
+		dm.portAllocator.Release(port)
+		return nil, err
+	}
+
 	launchRuntimeEnv := append([]string(nil), runtimeEnv...)
 	launchRuntimeSpec := runtimeSpec
 	launchRuntimeSpec.Sandbox.Workspace = runtimeWorkspaceRootFromPath(workspace)
 
 	runtimeEnv = appendRuntimePersistenceEnv(runtimeEnv, workspace)
 
-	hostConfig := buildDockerHostConfig(port, workspace)
+	hostConfig := buildDockerHostConfig(port, workspace, tmpDir)
 
 	startCommand, err := buildForegroundRuntimeCommand(runtimeSpec.StartCommand)
 	if err != nil {
@@ -288,7 +294,7 @@ func buildDockerContainerConfig(runtimeSpec schema.RuntimeSpec, runtimeEnv, star
 	}, nil
 }
 
-func buildDockerHostConfig(port int, workspace string) *container.HostConfig {
+func buildDockerHostConfig(port int, workspace, tmpDir string) *container.HostConfig {
 	pidsLimit := int64(256)
 	hostConfig := &container.HostConfig{
 		PortBindings: nat.PortMap{
@@ -347,6 +353,17 @@ func buildDockerHostConfig(port int, workspace string) *container.HostConfig {
 		Source: workspace,
 		Target: containerHome,
 	})
+	// The rootfs is read-only, so the container has no writable /tmp. Bind a
+	// host dir (a sibling of the pid workspace, under sandbox_workspace) so the
+	// adapter's startup-hook log and any tooling that assumes a writable /tmp
+	// work, and the contents are inspectable/persisted on the host.
+	if tmpDir != "" {
+		hostConfig.Mounts = append(hostConfig.Mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: tmpDir,
+			Target: containerTmp,
+		})
+	}
 	return hostConfig
 }
 
