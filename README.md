@@ -209,17 +209,20 @@ joinNetwork: false  # Set to true for production network
 
 ## 📋 Module Configuration
 
+> 📘 **Full profile-driven build & spawn guide:** [docs/profile-module-guide.md](docs/profile-module-guide.md).
+> V2 modules are built from a declarative `profile.toml`; that guide is the authoritative, step-by-step reference. This section is a summary.
+
 ### 🏷️ Module Format Requirements
 
 VMDocker modules must follow specific format requirements to ensure proper container execution:
 
 #### **ModuleFormat Specification**
-- **Required Prefix**: `web.vmdocker-`
-- **Format Pattern**: `web.vmdocker-{runtime}-{version}`
-- **Examples**:
-  - `web.vmdocker-golua-ao.v0.0.1`
-  - `web.vmdocker-wasm-ao.v1.0.0`
-  - `web.vmdocker-evm-ao.v2.1.0`
+
+V2 uses a single module format constant (no per-runtime prefix):
+
+- **Module Format**: `hymx.vmdockerv2.v0.0.1`
+
+The node mounts the spawn handler under this format (`s.Mount(ModuleFormat, vmdocker.Spawn)`); any other format is rejected with `unsupported module format`.
 
 #### **Required Tags**
 
@@ -230,27 +233,23 @@ Every VMDocker module **MUST** include the following tags:
 | `Image-Name` | Docker image name and tag | `chriswebber/docker-golua:v0.0.2` |
 | `Image-ID` | Docker image SHA256 digest | `sha256:b2e104cdcb5c09a8f213aefcadd451cbabfda1f16c91107e84eef051f807d45b` |
 | `Image-Source` | Module image source selector | `module-data` |
-| `Image-Archive-Format` | Embedded image archive format | `docker-save+gzip` |
+| `Image-Archive-Format` | Embedded image archive format | `container-tar+image.tar.gz` |
 
-> ⚠️ **Important**: `Image-Name`, `Image-ID`, `Image-Source=module-data`, and `Image-Archive-Format=docker-save+gzip` are mandatory. Legacy `Build-*` modules are no longer supported.
+> ⚠️ **Important**: `Image-Name`, `Image-ID`, `Image-Source=module-data`, and `Image-Archive-Format` are mandatory. The current builder emits `Image-Archive-Format=container-tar+image.tar.gz`; the loader still accepts the legacy `docker-save+gzip`. `Build-Type` / legacy `Build-*` modules are rejected.
 
 #### **What A Module Contains**
 
 VMDocker sandbox modules no longer store a Dockerfile or build recipe for spawn-time builds.
 
-The generated module now contains:
+The generated module bundle `data` is a gzipped container-tar carrying:
 
-- image/runtime metadata tags such as `Start-Command`, `Sandbox-Agent`, `Openclaw-Version`
-- final image metadata in tags: `Image-Name`, `Image-ID`
-- the actual Docker image archive inside bundle `data`
+- `image.tar.gz` — the image, produced by `docker save <image> | gzip`
+- `profile.toml` — the declarative build recipe, also seeded into the workspace on spawn
+- `public.zip` — optional; the exportable files selected by `[vmdocker].public`
 
-`Runtime-Backend` is no longer stored in the module. Backend selection now happens at spawn time.
+plus metadata tags: `Image-Name`, `Image-ID`, `Image-Source=module-data`, `Image-Archive-Format=container-tar+image.tar.gz`, `Capability-Public`, `Member-Image-SHA256`.
 
-The image archive format is:
-
-```text
-docker save <image> | gzip
-```
+`Runtime-Backend` is not stored in the module. Backend selection happens at spawn time.
 
 At spawn time, VMDocker behaves like this:
 
@@ -334,152 +333,48 @@ This means both backends are intended to write runtime state only inside the map
 
 #### **End-To-End Workflow**
 
-Claude-specific developer guide:
-
-- [Claude Runtime In VMDocker](/Users/webbergao/work/src/HymxWorkspace/vmdocker/docs/claude-runtime.md)
-
-Follow these steps to create, validate, and run a sandbox module end to end.
-
-**Step 1: Prepare The Final Image**
-
-Choose one of these two generation modes in `vmdocker_agent/.env`:
-
-- Pull mode:
-  - set `VMDOCKER_SANDBOX_IMAGE_NAME`
-  - optionally set `VMDOCKER_SANDBOX_IMAGE_ID`
-- Build mode:
-  - set `VMDOCKER_BUILD_DOCKERFILE`
-  - set `VMDOCKER_BUILD_CONTEXT_DIR`
-  - set `VMDOCKER_BUILD_TAG`
-
-Common required entries:
-
-```dotenv
-VMDOCKER_URL=http://127.0.0.1:8080
-VMDOCKER_PRIVATE_KEY=
-```
-
-**Step 2: Generate The Module**
-
-Run the generator from `vmdocker_agent`:
+The full, current workflow — writing `profile.toml`, building the module, and spawning it — lives in
+**[docs/profile-module-guide.md](docs/profile-module-guide.md)**. Claude-specific runtime notes:
+[docs/claude-runtime.md](docs/claude-runtime.md). In short:
 
 ```bash
-cd /Users/webbergao/work/src/HymxWorkspace/vmdocker_agent
-go run ./cmd/module
-```
+# 1) Build the linux platform adapter from the sibling repo vmdocker_agent
+cd ../vmdocker_agent
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/vmdocker-agent .
 
-This command:
+# 2) Build + sign a module from your profile.toml (needs VMDOCKER_PRIVATE_KEY)
+cd ../vmdockerv2
+export VMDOCKER_URL=http://127.0.0.1:8080
+export VMDOCKER_PRIVATE_KEY=0x<your-key>
+go run ./cmd/module -profile ./mymod/profile.toml -agent-bin /tmp/vmdocker-agent
+#  -> [module] saved module <id> -> mod-<id>.json
 
-- prepares the final local image
-- exports it with `docker save | gzip`
-- writes a local bundle file `mod-<module-id>.json`
-- prints the generated module id
-
-Example output:
-
-```bash
-[module] generate and save module success, id <generated-module-id>
-[module] local bundle file: mod-<generated-module-id>.json
-```
-
-**Step 3: Make The Module File Available To The Node**
-
-For local testing, copy the generated file into the VMDocker node working directory:
-
-```bash
-cd /Users/webbergao/work/src/HymxWorkspace/vmdocker
-mkdir -p mod
-cp ../vmdocker_agent/mod/mod-<generated-module-id>.json ./mod/mod-<generated-module-id>.json
-```
-
-If the node downloads the module from the network instead, Hymx will cache the same bundle as `mod/mod-<module-id>.json` automatically after the first download.
-
-**Step 4: Start The VMDocker Node**
-
-```bash
-cd /Users/webbergao/work/src/HymxWorkspace/vmdocker
+# 3) Make the module available to the node, then start it
+mkdir -p ./mod && cp mod-<id>.json ./mod/mod-<id>.json
 go build -o ./build/hymx-node ./cmd
 ./build/hymx-node --config ./config.yaml
 ```
 
-**Step 5: Configure Example Environment**
+**Validate cold start from module data:** delete the local image matching `Image-Name` and spawn again
+with the same module id; the runtime restores it via
+`module file -> bundle data -> gunzip -> docker image load -> start`.
 
-In `vmdocker/examples/.env`, point both ids to the generated module:
-
-```dotenv
-VMDOCKER_MODULE_ID=<generated-module-id>
-OPENCLAW_MODULE_ID=<generated-module-id>
-OPENCLAW_PROVIDER=zen
-OPENCLAW_MODEL=plan
-# Optional: if you omit OPENCLAW_PROVIDER, a fully-qualified model like kimi-coding/k2p5 still works.
-```
-
-**Step 6: Spawn The Runtime**
-
-General spawn:
-
-```bash
-cd /Users/webbergao/work/src/HymxWorkspace/vmdocker
-go run ./examples spawn
-```
-
-OpenClaw spawn:
-
-```bash
-cd /Users/webbergao/work/src/HymxWorkspace/vmdocker
-go run ./examples openclaw_spawn
-```
-
-The example forwards `provider`, `model`, and `apiKey` as spawn tags to `vmdocker_agent`. If `OPENCLAW_PROVIDER` is set, provider selection is explicit and the runtime will normalize the final model to `<provider>/<model-suffix>`.
-
-**Step 7: Configure Telegram Without Pairing**
-
-OpenClaw follows the official Telegram rules:
-
-- `dmPolicy=open` is valid
-- but `allowFrom` must include `"*"` for open DM access
-
-Recommended example settings:
-
-```dotenv
-OPENCLAW_TELEGRAM_DM_POLICY=open
-OPENCLAW_TELEGRAM_ALLOW_FROM=*
-```
-
-Then run:
-
-```bash
-cd /Users/webbergao/work/src/HymxWorkspace/vmdocker
-go run ./examples openclaw_tg
-```
-
-The runtime will patch `openclaw.json`, restart the gateway if needed, and enable Telegram with open DMs.
-
-**Step 8: Validate Cold Start From Module Data**
-
-To verify that VMDocker can restore the image from the module file instead of local Docker cache:
-
-1. Delete the local image matching `Image-Name`
-2. Spawn again with the same module id
-3. Confirm the runtime still starts successfully
-
-This validates the full recovery path:
-
-```text
-module file -> bundle data -> gunzip -> docker image load -> sandbox start
-```
+**Local end-to-end checks (no chain):** run `bash scripts/e2e_capability.sh` (add `RUN_REAL_SPAWN=1`
+for a real build + spawn). See the guide for `cmd/vmme2e` (`seed` / `seed-clone` / `export` /
+`pack-synthetic`) details.
 
 #### **Validation Process**
 
-VMDocker automatically validates modules using the `checkModule` function:
+VMDocker validates a module when it resolves the runtime spec (`CheckModuleFormat` / `imageInfoFromTags` in `vmdocker/utils/utils.go`):
 
-1. ✅ **ModuleFormat Check**: verifies the module format
-2. ✅ **Image-Name Check**: ensures `Image-Name` exists
-3. ✅ **Image-ID Check**: ensures `Image-ID` exists
-4. ✅ **Image-Source Check**: requires `Image-Source=module-data`
-5. ✅ **Image-Archive-Format Check**: requires `Image-Archive-Format=docker-save+gzip`
+1. ✅ **Module Format**: must be `hymx.vmdockerv2.v0.0.1`
+2. ✅ **Image-Name**: must be present
+3. ✅ **Image-ID**: must be present
+4. ✅ **Image-Source**: must equal `module-data`
+5. ✅ **Image-Archive-Format**: must be `container-tar+image.tar.gz` or `docker-save+gzip`
+6. 🚫 **Build-Type**: rejected — legacy build modules are no longer supported
 
-If any validation fails, the module will be rejected and container creation will fail.
+If any check fails, the module is rejected and container creation fails.
 
 ## 🚀 Running VMDocker
 
