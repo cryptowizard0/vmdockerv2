@@ -225,6 +225,30 @@ func extractImageFromContainerTar(r io.Reader) (io.ReadCloser, error) {
 	return extractMemberFromContainerTar(r, "image.tar.gz", maxModuleMemberBytes)
 }
 
+// readModuleImageArchive reads the image.tar.gz member out of a module's
+// container-tar payload and returns it fully in memory. Export (Option A) uses
+// it to reuse the running agent's existing image instead of rebuilding: the
+// image-build inputs (bin/, start.sh) live baked in the image, not in the
+// runtime workspace, so a rebuild is impossible — but the exact image bytes are
+// already in the module the process was spawned from.
+func readModuleImageArchive(moduleID, archiveFormat string) ([]byte, error) {
+	if archiveFormat != runtimeSchema.ImageArchiveContainerTarGZ {
+		return nil, fmt.Errorf("module %s image archive format %q is not reusable for export", moduleID, archiveFormat)
+	}
+	payload, err := openModulePayloadGzip(moduleID)
+	if err != nil {
+		return nil, fmt.Errorf("read module %s payload stream failed: %w", moduleID, err)
+	}
+	defer payload.Close()
+
+	rc, err := extractImageFromContainerTar(payload)
+	if err != nil {
+		return nil, fmt.Errorf("extract image.tar.gz from module %s failed: %w", moduleID, err)
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
+}
+
 func extractMemberFromContainerTar(r io.Reader, memberName string, maxBytes int64) (io.ReadCloser, error) {
 	tr := tar.NewReader(r)
 	for {

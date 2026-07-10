@@ -10,7 +10,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -147,7 +146,8 @@ func cmdSeedClone(args []string) error {
 	return nil
 }
 
-// export runs the real host-side Export (rebuilds the image + packs public.zip).
+// export runs the real host-side Export (Option A: reuses the provided image
+// archive + packs a fresh public.zip from the workspace; no rebuild).
 func cmdExport(args []string) error {
 	f := flagset(args)
 	ws, err := require(f, "workspace")
@@ -158,9 +158,18 @@ func cmdExport(args []string) error {
 	if err != nil {
 		return err
 	}
-	res, err := capability.Export(context.Background(), ws, capability.ExportOptions{
-		AgentBinPath: f["agent-bin"],
-		BuildTag:     f["build-tag"],
+	imagePath, err := require(f, "image-archive")
+	if err != nil {
+		return err
+	}
+	imageArchive, err := os.ReadFile(imagePath)
+	if err != nil {
+		return err
+	}
+	res, err := capability.Export(ws, capability.ExportOptions{
+		ImageArchive: imageArchive,
+		ImageName:    f["image-name"],
+		ImageID:      f["image-id"],
 		SignerKey:    f["signer-key"],
 	})
 	if err != nil {

@@ -713,9 +713,20 @@ func (v *VmDocker) applyCapabilityExport(meta vmmSchema.Meta) *vmmSchema.Result 
 		}
 		return &vmmSchema.Result{Output: col}
 	}
-	exported, err := capability.Export(context.Background(), home, capability.ExportOptions{
-		AgentBinPath: os.Getenv("VMDOCKER_AGENT_BIN"),
-		BuildTag:     paramValue(meta.Params, "build_tag", "Build-Tag"),
+	// Option A: reuse the running agent's existing image (the one it was spawned
+	// from) instead of rebuilding — the build inputs (bin/, start.sh) are baked in
+	// the image, not the runtime workspace. RuntimeSpec.Image.SHA carries the
+	// original Image-ID; both tags must be non-empty for the exported module to
+	// spawn again.
+	image := v.instanceInfo.RuntimeSpec.Image
+	imageArchive, err := readModuleImageArchive(v.Env.Process.Module, image.ArchiveFormat)
+	if err != nil {
+		return &vmmSchema.Result{Error: err}
+	}
+	exported, err := capability.Export(home, capability.ExportOptions{
+		ImageArchive: imageArchive,
+		ImageName:    image.Name,
+		ImageID:      image.SHA,
 		SignerKey:    os.Getenv("VMDOCKER_MODULE_SIGNER_KEY"),
 	})
 	if err != nil {
