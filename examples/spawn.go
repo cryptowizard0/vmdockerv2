@@ -6,10 +6,14 @@ import (
 
 func spawn() {
 	runtimeBackend := GetEnvWith("RUNTIME_BACKEND", "")
-	res, err := s.Spawn(
+	res, err := s.SpawnAndWait(
 		module,
 		scheduler,
 		runtimeBackendTags(runtimeBackend),
 	)
-	fmt.Printf("res: %#v, err: %v\n", res, err)
+	if err != nil {
+		fmt.Printf("spawn failed: %v\n", err)
+		return
+	}
+	fmt.Printf("spawned pid: %s\n", res.Id)
 }
