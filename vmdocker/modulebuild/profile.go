@@ -18,7 +18,7 @@ type Profile struct {
 // DockerfileSection maps to [dockerfile]; keys mirror Dockerfile instructions
 // where one exists (FROM/RUN), plus convenience keys (bin/tools/startup).
 type DockerfileSection struct {
-	From    string   `toml:"FROM"`    // base image alias, resolved by ResolveFROM
+	From    string   `toml:"FROM"`    // full base image name, used verbatim as Dockerfile FROM
 	Bin     string   `toml:"bin"`     // user executables dir, COPY'd to /usr/local/bin
 	Tools   []string `toml:"tools"`   // packages to install
 	Run     []string `toml:"RUN"`     // custom RUN args (without the RUN prefix)

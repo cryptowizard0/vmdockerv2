@@ -107,7 +107,7 @@ func TestSeedWorkspaceProfileFromContainerTarModule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read seeded profile: %v", err)
 	}
-	if !strings.Contains(string(got), `FROM="openclaw"`) {
+	if !strings.Contains(string(got), `FROM="docker/sandbox-templates:shell"`) {
 		t.Fatalf("seeded profile = %q", got)
 	}
 }
@@ -407,7 +407,7 @@ func writeContainerModulePayload(moduleID string, imageArchive []byte) error {
 	if err := writeMember("image.tar.gz", imageArchive); err != nil {
 		return err
 	}
-	if err := writeMember("profile.toml", []byte("[dockerfile]\nFROM=\"openclaw\"\n")); err != nil {
+	if err := writeMember("profile.toml", []byte("[dockerfile]\nFROM=\"docker/sandbox-templates:shell\"\n")); err != nil {
 		return err
 	}
 	if err := tw.Close(); err != nil {
@@ -533,7 +533,7 @@ func writeContainerModulePayloadWithPublic(moduleID string, imageArchive, public
 	if err := writeMember("image.tar.gz", imageArchive); err != nil {
 		return err
 	}
-	if err := writeMember("profile.toml", []byte("[dockerfile]\nFROM=\"openclaw\"\n")); err != nil {
+	if err := writeMember("profile.toml", []byte("[dockerfile]\nFROM=\"docker/sandbox-templates:shell\"\n")); err != nil {
 		return err
 	}
 	if err := writeMember("public.zip", publicZip); err != nil {
@@ -571,7 +571,7 @@ func TestSeedWorkspaceFromModule_ProfileAndPublic(t *testing.T) {
 	if err := seedWorkspaceFromModule(moduleID, ws, runtimeSchema.ImageArchiveContainerTarGZ); err != nil {
 		t.Fatalf("seedWorkspaceFromModule: %v", err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(ws, "profile.toml")); !strings.Contains(string(b), `FROM="openclaw"`) {
+	if b, _ := os.ReadFile(filepath.Join(ws, "profile.toml")); !strings.Contains(string(b), `FROM="docker/sandbox-templates:shell"`) {
 		t.Fatalf("seeded profile = %q", b)
 	}
 	if b, _ := os.ReadFile(filepath.Join(ws, "skills", "soul.md")); string(b) != "SOUL" {
@@ -589,7 +589,7 @@ func TestSeedWorkspaceFromModule_NoPublicIsNoop(t *testing.T) {
 	if err := seedWorkspaceFromModule(moduleID, ws, runtimeSchema.ImageArchiveContainerTarGZ); err != nil {
 		t.Fatalf("seedWorkspaceFromModule: %v", err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(ws, "profile.toml")); !strings.Contains(string(b), `FROM="openclaw"`) {
+	if b, _ := os.ReadFile(filepath.Join(ws, "profile.toml")); !strings.Contains(string(b), `FROM="docker/sandbox-templates:shell"`) {
 		t.Fatalf("seeded profile = %q", b)
 	}
 	if _, err := os.Stat(filepath.Join(ws, "skills")); !os.IsNotExist(err) {

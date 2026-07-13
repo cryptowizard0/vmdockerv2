@@ -17,7 +17,7 @@ func TestStageBuildContext(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "startup.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	profileTOML := []byte("[dockerfile]\nFROM=\"openclaw\"\nbin=\"bin\"\nstartup=\"startup.sh\"\n")
+	profileTOML := []byte("[dockerfile]\nFROM=\"docker/sandbox-templates:shell\"\nbin=\"bin\"\nstartup=\"startup.sh\"\n")
 	agentBin := filepath.Join(src, "platform-agent")
 	if err := os.WriteFile(agentBin, []byte("BIN"), 0o755); err != nil {
 		t.Fatal(err)

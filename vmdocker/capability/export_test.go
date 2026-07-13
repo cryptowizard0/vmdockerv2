@@ -8,7 +8,7 @@ import (
 
 const claudeExportProfileTOML = `
 [dockerfile]
-FROM = "claude"
+FROM = "docker/sandbox-templates:claude-code"
 bin = "bin"
 startup = "start.sh"
 

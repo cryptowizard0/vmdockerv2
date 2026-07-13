@@ -36,7 +36,7 @@ vmdockerv2 is the Docker-backed sandbox VM for the HyMatrix compute network. Com
 
 Core ideas:
 
-1. **Declarative, single input.** You only write `profile.toml` (pick a base alias, drop in a few executables, one startup script, optional packages). The builder **generates a standardized, hardened Dockerfile** from it — you never hand-write a Dockerfile. Hardening includes: a fixed container `ENTRYPOINT` (the `vmdocker-agent` adapter), a non-privileged `hymx` user, removal from the `sudo`/`docker` groups, a read-only root filesystem, and so on.
+1. **Declarative, single input.** You only write `profile.toml` (pick a base image, drop in a few executables, one startup script, optional packages). The builder **generates a standardized, hardened Dockerfile** from it — you never hand-write a Dockerfile. Hardening includes: a fixed container `ENTRYPOINT` (the `vmdocker-agent` adapter), a non-privileged `hymx` user, removal from the `sudo`/`docker` groups, a read-only root filesystem, and so on.
 
 2. **The image travels with the module (self-contained).** The build does `docker save | gzip` into `image.tar.gz` and packs it — together with `profile.toml` (and an optional `public.zip`) — into one **container-tar** that is the module payload. On spawn, if the local Docker has no matching image, it is restored from the module payload via `docker image load` — there is **no build at spawn time**. Archive-format constant: `container-tar+image.tar.gz`.
 
@@ -79,18 +79,17 @@ The schema is defined in [`vmdocker/modulebuild/profile.go`](../vmdocker/moduleb
 
 | Key | Required | Type | Meaning |
 |---|---|---|---|
-| `FROM` | ✅ | string | Base image **alias** (not a real image name), resolved by `ResolveFROM`. Supported: `openclaw`, `claude` |
+| `FROM` | ✅ | string | **Full base image name**, used verbatim as the Dockerfile `FROM` (e.g. `docker/sandbox-templates:claude-code`, `ghcr.io/acme/agent:v1`). No alias mapping |
 | `bin` | ✅ | string | A directory name; its executables are `COPY {bin}/ → /usr/local/bin/` |
 | `startup` | ✅ | string | Your startup script; `COPY → /usr/local/lib/vmdocker-agent/user-startup.sh`. **It is your hook, not the container ENTRYPOINT** |
 | `tools` | ⬜ | []string | System packages to install; the build auto-detects `apt-get`/`apk`/`microdnf` |
 | `RUN` | ⬜ | []string | Extra Dockerfile `RUN` instructions **without the `RUN` prefix**; each renders as one line |
 
-> `FROM` alias map (see [`vmdocker/modulebuild/dockerfile.go`](../vmdocker/modulebuild/dockerfile.go) `baseAliases`):
-> | Alias | Actual base image | `RUNTIME_TYPE` |
-> |---|---|---|
-> | `openclaw` | `docker/sandbox-templates:shell` | `openclaw` |
-> | `claude` | `docker/sandbox-templates:claude-code` | `claude` |
-> An unknown alias fails fast: `unknown FROM alias ...`.
+> **`RUNTIME_TYPE` is not a profile field.** It is an adapter-specific concept
+> (gates `/vmm/health`: `claude`=wait for `claude` on PATH, `openclaw`=wait for
+> gateway, empty/`test`=always ready) and is supplied at **spawn time** via the
+> `Container-Env-RUNTIME_TYPE` tag (the `examples` read it from the `RUNTIME_TYPE`
+> env). profile.toml stays a generic, runtime-agnostic build/export recipe.
 
 **`[vmdocker]` — which files may be exported**
 
@@ -140,7 +139,7 @@ From the real e2e fixture in [`vmdocker/realspawn_e2e_test.go`](../vmdocker/real
 ```toml
 # mymod/profile.toml
 [dockerfile]
-FROM = "claude"
+FROM = "docker/sandbox-templates:claude-code"
 bin = "bin"
 startup = "start.sh"
 
@@ -158,7 +157,7 @@ A more practical example (install tools + custom RUN):
 
 ```toml
 [dockerfile]
-FROM = "openclaw"
+FROM = "docker/sandbox-templates:shell"
 bin = "bin"
 startup = "start.sh"
 tools = ["git", "jq", "ripgrep"]
@@ -193,11 +192,13 @@ RUN set -eux; \
     chmod +x /usr/local/bin/* /usr/local/lib/vmdocker-agent/user-startup.sh; \
     chown -R hymx:hymx /home/hymx /app
 ENV HOME=/home/hymx
-ENV RUNTIME_TYPE=claude
 USER hymx
 WORKDIR /home/hymx
 ENTRYPOINT ["/usr/local/bin/vmdocker-agent"]
 ```
+
+(`RUNTIME_TYPE` is no longer baked here — it is a spawn-time
+`Container-Env-RUNTIME_TYPE` tag.)
 
 - With `tools` set, an adaptive `apt-get`/`apk`/`microdnf` install `RUN` is inserted in the middle.
 - With `RUN` set, each entry renders as its own `RUN <your command>` line.
@@ -387,7 +388,7 @@ docker image rm <Image-Name>     # remove the local image
 
 **Three required keys (profile.toml):** `[dockerfile].FROM` + `[dockerfile].bin` + `[dockerfile].startup`.
 
-**Supported FROM aliases:** `openclaw` (shell template), `claude` (claude-code template).
+**`FROM`:** a full base image name, used verbatim (no alias mapping). `RUNTIME_TYPE` is set at spawn via the `Container-Env-RUNTIME_TYPE` tag, not in profile.toml.
 
 **Module format constant:** `hymx.vmdockerv2.v0.0.1`; **archive format:** `container-tar+image.tar.gz` (loader also accepts the legacy `docker-save+gzip`); **image source:** `module-data`.
 
@@ -402,7 +403,7 @@ docker image rm <Image-Name>     # remove the local image
 | Topic | File |
 |---|---|
 | profile.toml struct & parse | [`vmdocker/modulebuild/profile.go`](../vmdocker/modulebuild/profile.go) |
-| FROM aliases & Dockerfile template | [`vmdocker/modulebuild/dockerfile.go`](../vmdocker/modulebuild/dockerfile.go) |
+| FROM (verbatim image) & Dockerfile template | [`vmdocker/modulebuild/dockerfile.go`](../vmdocker/modulebuild/dockerfile.go) |
 | Build flow | [`vmdocker/modulebuild/build.go`](../vmdocker/modulebuild/build.go) |
 | Pack & tags | [`vmdocker/modulebuild/module.go`](../vmdocker/modulebuild/module.go) |
 | Build CLI entry | [`cmd/module/main.go`](../cmd/module/main.go) |

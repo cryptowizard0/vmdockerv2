@@ -22,6 +22,7 @@ func TestBuildOpenclawSpawnTags(t *testing.T) {
 		"Container-Env-OPENCLAW_DEFAULT_PROVIDER": "zen",
 		"Container-Env-OPENCLAW_GATEWAY_TOKEN":    "gateway-token-1",
 		"Runtime-Backend":                         "sandbox",
+		"Container-Env-RUNTIME_TYPE":              "openclaw",
 	}
 
 	if len(tags) != len(want) {

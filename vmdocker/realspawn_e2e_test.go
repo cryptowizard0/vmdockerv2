@@ -134,7 +134,7 @@ func writeRealSpawnFixture(t *testing.T, dir string) {
 		}
 	}
 	must(os.WriteFile(filepath.Join(dir, "profile.toml"), []byte(`[dockerfile]
-FROM = "claude"
+FROM = "docker/sandbox-templates:claude-code"
 bin = "bin"
 startup = "start.sh"
 

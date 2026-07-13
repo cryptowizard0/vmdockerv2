@@ -31,6 +31,8 @@ func buildOpenclawSpawnTags(model, provider, apiKey, gatewayToken, runtimeBacken
 		goarSchema.Tag{Name: utils.ContainerEnvTagPrefix + "OPENCLAW_GATEWAY_TOKEN", Value: gatewayToken},
 	)
 	tags = append(tags, runtimeBackendTags(runtimeBackend)...)
+	// RUNTIME_TYPE is no longer baked into the image; openclaw must declare it.
+	tags = append(tags, runtimeTypeTags("openclaw")...)
 	if defaultModel != "" {
 		tags = append(tags, goarSchema.Tag{Name: utils.ContainerEnvTagPrefix + "OPENCLAW_DEFAULT_MODEL", Value: defaultModel})
 	}

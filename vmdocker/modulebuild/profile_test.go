@@ -5,7 +5,7 @@ import "testing"
 func TestParseProfile_AllFields(t *testing.T) {
 	src := []byte(`
 [dockerfile]
-FROM = "openclaw"
+FROM = "docker/sandbox-templates:shell"
 bin = "bin"
 tools = ["curl", "ripgrep"]
 RUN = ["pip install --no-cache-dir foo"]
@@ -18,8 +18,8 @@ public = ["skills", "persona"]
 	if err != nil {
 		t.Fatalf("ParseProfile returned error: %v", err)
 	}
-	if p.Dockerfile.From != "openclaw" {
-		t.Fatalf("From = %q, want openclaw", p.Dockerfile.From)
+	if p.Dockerfile.From != "docker/sandbox-templates:shell" {
+		t.Fatalf("From = %q, want docker/sandbox-templates:shell", p.Dockerfile.From)
 	}
 	if p.Dockerfile.Bin != "bin" {
 		t.Fatalf("Bin = %q, want bin", p.Dockerfile.Bin)

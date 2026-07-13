@@ -7,28 +7,6 @@ import (
 	"text/template"
 )
 
-// BaseSpec is the resolved result of a FROM alias (spec §5.3).
-type BaseSpec struct {
-	Image       string // base docker image that already bundles the engine
-	RuntimeType string // value for the RUNTIME_TYPE env / adapter dispatch
-}
-
-// baseAliases maps profile [dockerfile].FROM aliases to a platform base image.
-// hermes is intentionally omitted until its base image is provided.
-var baseAliases = map[string]BaseSpec{
-	"openclaw": {Image: "docker/sandbox-templates:shell", RuntimeType: "openclaw"},
-	"claude":   {Image: "docker/sandbox-templates:claude-code", RuntimeType: "claude"},
-}
-
-// ResolveFROM resolves a FROM alias to its base image + runtime type.
-func ResolveFROM(alias string) (BaseSpec, error) {
-	spec, ok := baseAliases[strings.ToLower(strings.TrimSpace(alias))]
-	if !ok {
-		return BaseSpec{}, fmt.Errorf("unknown FROM alias %q (supported: openclaw, claude)", alias)
-	}
-	return spec, nil
-}
-
 // DockerfileInput carries everything needed to render the standardized
 // Dockerfile. AgentBinSrc is the build-context path to the platform adapter
 // binary, which is launched directly as ENTRYPOINT.
@@ -39,7 +17,6 @@ type DockerfileInput struct {
 
 type dockerfileView struct {
 	BaseImage   string
-	RuntimeType string
 	AgentBinSrc string
 	Bin         string
 	Startup     string
@@ -71,19 +48,19 @@ COPY profile.toml /home/hymx/profile.toml
     chmod +x /usr/local/bin/* /usr/local/lib/vmdocker-agent/user-startup.sh; \
     chown -R hymx:hymx /home/hymx /app
 ENV HOME=/home/hymx
-ENV RUNTIME_TYPE={{.RuntimeType}}
 USER hymx
 WORKDIR /home/hymx
 ENTRYPOINT ["/usr/local/bin/vmdocker-agent"]
 `))
 
 // GenerateDockerfile renders the standardized Dockerfile from a profile.
+// FROM is used verbatim as the base image name; RUNTIME_TYPE is not a build-time
+// concern (it is supplied at spawn via the Container-Env-RUNTIME_TYPE tag).
 func GenerateDockerfile(in DockerfileInput) (string, error) {
-	base, err := ResolveFROM(in.Profile.Dockerfile.From)
-	if err != nil {
-		return "", err
-	}
 	d := in.Profile.Dockerfile
+	if strings.TrimSpace(d.From) == "" {
+		return "", fmt.Errorf("profile [dockerfile].FROM is required")
+	}
 	if strings.TrimSpace(d.Bin) == "" {
 		return "", fmt.Errorf("profile [dockerfile].bin is required")
 	}
@@ -96,8 +73,7 @@ func GenerateDockerfile(in DockerfileInput) (string, error) {
 
 	var buf bytes.Buffer
 	if err := dockerfileTmpl.Execute(&buf, dockerfileView{
-		BaseImage:   base.Image,
-		RuntimeType: base.RuntimeType,
+		BaseImage:   d.From,
 		AgentBinSrc: in.AgentBinSrc,
 		Bin:         d.Bin,
 		Startup:     d.Startup,

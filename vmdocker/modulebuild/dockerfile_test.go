@@ -5,36 +5,10 @@ import (
 	"testing"
 )
 
-func TestResolveFROM(t *testing.T) {
-	cases := []struct {
-		alias       string
-		wantImage   string
-		wantRuntime string
-	}{
-		{"openclaw", "docker/sandbox-templates:shell", "openclaw"},
-		{"claude", "docker/sandbox-templates:claude-code", "claude"},
-	}
-	for _, c := range cases {
-		got, err := ResolveFROM(c.alias)
-		if err != nil {
-			t.Fatalf("ResolveFROM(%q) error: %v", c.alias, err)
-		}
-		if got.Image != c.wantImage || got.RuntimeType != c.wantRuntime {
-			t.Fatalf("ResolveFROM(%q) = %+v, want image=%s runtime=%s", c.alias, got, c.wantImage, c.wantRuntime)
-		}
-	}
-}
-
-func TestResolveFROM_Unknown(t *testing.T) {
-	if _, err := ResolveFROM("nope"); err == nil {
-		t.Fatal("expected error for unknown FROM alias")
-	}
-}
-
 func TestGenerateDockerfile(t *testing.T) {
 	p := Profile{
 		Dockerfile: DockerfileSection{
-			From:    "openclaw",
+			From:    "docker/sandbox-templates:shell",
 			Bin:     "bin",
 			Tools:   []string{"curl", "jq"},
 			Run:     []string{"pip install --no-cache-dir foo"},
@@ -57,7 +31,6 @@ func TestGenerateDockerfile(t *testing.T) {
 		"RUN pip install --no-cache-dir foo",
 		"useradd",
 		"ENV HOME=/home/hymx",
-		"ENV RUNTIME_TYPE=openclaw",
 		"USER hymx",
 		"WORKDIR /home/hymx",
 		`ENTRYPOINT ["/usr/local/bin/vmdocker-agent"]`,
@@ -67,6 +40,10 @@ func TestGenerateDockerfile(t *testing.T) {
 			t.Errorf("Dockerfile missing %q\n---\n%s", want, out)
 		}
 	}
+	// RUNTIME_TYPE is no longer a build-time concern; it must not be baked.
+	if strings.Contains(out, "RUNTIME_TYPE") {
+		t.Errorf("Dockerfile must not bake RUNTIME_TYPE:\n%s", out)
+	}
 	if strings.Contains(out, "start-vmdocker-agent.sh") {
 		t.Error("wrapper must no longer be referenced")
 	}
@@ -75,9 +52,9 @@ func TestGenerateDockerfile(t *testing.T) {
 	}
 }
 
-func TestGenerateDockerfileUsesAdapterEntrypoint(t *testing.T) {
+func TestGenerateDockerfileUsesFromVerbatim(t *testing.T) {
 	profile := Profile{Dockerfile: DockerfileSection{
-		From: "openclaw", Bin: "bin", Startup: "start.sh",
+		From: "ghcr.io/acme/custom-agent:v1.2.3", Bin: "bin", Startup: "start.sh",
 	}}
 	out, err := GenerateDockerfile(DockerfileInput{
 		Profile:     profile,
@@ -86,16 +63,23 @@ func TestGenerateDockerfileUsesAdapterEntrypoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
+	if !strings.Contains(out, "FROM ghcr.io/acme/custom-agent:v1.2.3") {
+		t.Fatalf("FROM not used verbatim:\n%s", out)
+	}
 	if !strings.Contains(out, `ENTRYPOINT ["/usr/local/bin/vmdocker-agent"]`) {
 		t.Fatalf("ENTRYPOINT not adapter:\n%s", out)
 	}
-	if strings.Contains(out, "start-vmdocker-agent.sh") {
-		t.Fatalf("wrapper still referenced:\n%s", out)
-	}
-	if !strings.Contains(out, "ENV RUNTIME_TYPE=openclaw") {
-		t.Fatalf("RUNTIME_TYPE dropped:\n%s", out)
+	if strings.Contains(out, "RUNTIME_TYPE") {
+		t.Fatalf("RUNTIME_TYPE must not be baked:\n%s", out)
 	}
 	if !strings.Contains(out, "user-startup.sh") {
 		t.Fatalf("startup COPY dropped:\n%s", out)
+	}
+}
+
+func TestGenerateDockerfileRequiresFrom(t *testing.T) {
+	profile := Profile{Dockerfile: DockerfileSection{Bin: "bin", Startup: "start.sh"}}
+	if _, err := GenerateDockerfile(DockerfileInput{Profile: profile, AgentBinSrc: "platform/vmdocker-agent"}); err == nil {
+		t.Fatal("expected error when FROM is empty")
 	}
 }

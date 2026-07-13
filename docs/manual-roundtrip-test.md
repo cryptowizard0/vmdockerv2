@@ -73,7 +73,8 @@ VMDOCKER_EXPORT_PID=
 ## profile 完整配置
 
 建一个自包含的 agent 目录。`[dockerfile].bin` 和 `[dockerfile].startup` 是**必填**(生成器强制);
-`FROM` 只能是 `openclaw` 或 `claude`。
+`FROM` 填**完整镜像名**,原样作为 Dockerfile 的 FROM(不再做别名映射)。RUNTIME_TYPE 不在 profile 里
+—— 它是 spawn 时的 `Container-Env-RUNTIME_TYPE` tag(examples 从 `.env` 的 `RUNTIME_TYPE` 读)。
 
 ```
 myagent/
@@ -103,10 +104,10 @@ myagent/
 # 两段互不串用。
 
 [dockerfile]
-# 基础镜像别名 -> 基础镜像 + RUNTIME_TYPE。只支持这两个:
-#   "openclaw" -> docker/sandbox-templates:shell        (RUNTIME_TYPE=openclaw;/vmm/health 等网关就绪)
-#   "claude"   -> docker/sandbox-templates:claude-code  (RUNTIME_TYPE=claude;  claude 在 PATH 上即就绪)
-FROM = "claude"
+# 完整基础镜像名,原样作为 Dockerfile 的 FROM(不做别名映射)。
+# RUNTIME_TYPE 不在这里 —— spawn 时用 Container-Env-RUNTIME_TYPE tag 传(examples 从 .env RUNTIME_TYPE 读),
+# 决定 adapter 健康就绪:claude=等 claude 在 PATH、openclaw=等网关、空/test=永远就绪。
+FROM = "docker/sandbox-templates:claude-code"
 
 # 你的可执行文件目录。整目录 COPY 进 /usr/local/bin 并 chmod +x。
 # 必填 —— 可以为空(留个 .keep 保证目录存在)。
@@ -149,7 +150,7 @@ exit 0
 mkdir -p /tmp/myagent/bin /tmp/myagent/skills /tmp/myagent/persona
 cat > /tmp/myagent/profile.toml <<'TOML'
 [dockerfile]
-FROM = "claude"
+FROM = "docker/sandbox-templates:claude-code"
 bin = "bin"
 startup = "start.sh"
 tools = ["ripgrep", "jq"]
@@ -284,8 +285,9 @@ VMDOCKER_AGENT_BIN=/Users/webbergao/work/src/HymxWorkspace/vmdocker_agent/build/
 
 ## 坑位提醒
 
-- **`FROM` 只支持 `openclaw` / `claude`。** `claude` 是省事路径 —— 基础镜像里 `claude` 在 PATH 上,
-  `/vmm/health` 立刻就绪,不用拉引擎。
+- **`FROM` 是完整镜像名(原样用),不再有别名。** `RUNTIME_TYPE` 由 spawn 的
+  `Container-Env-RUNTIME_TYPE` tag 提供(`.env` 的 `RUNTIME_TYPE` → examples 传);不传则 adapter 默认
+  `test`(健康永远就绪)。要 claude 的"等 claude 在 PATH"门控,`.env` 里设 `RUNTIME_TYPE=claude`。
 - **`bin` 和 `startup` 必填。** 缺任一个,`GenerateDockerfile` 直接报错。
 - **用 vmdockerv2 的 `cmd/module`**,别用 `examples module`(后者指向已删除的
   `vmdocker_agent/cmd/module`)。
