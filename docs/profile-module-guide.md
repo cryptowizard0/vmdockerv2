@@ -44,7 +44,7 @@ Core ideas:
 
 4. **A fixed runtime workspace contract.** Each instance workspace is `<root>/sandbox_workspace/<pid>`, mapped inside the container to `HOME=/home/hymx`, with `OPENCLAW_*`, `XDG_*`, `TMPDIR`, etc. pre-seeded. Both backends write runtime state only inside that mapped workspace.
 
-5. **Replication is spawn-a-clone.** There is no Import. The `[vmdocker].public` allowlist in `profile.toml` declares which files may be exported; `Export` collects them into a `public.zip` that is signed into a new module and seeded into a fresh workspace on spawn — so a running agent can "grow" a clone carrying its public state (skills, persona, ...).
+5. **Public state travels in `public.zip`.** The `[vmdocker].public` allowlist in `profile.toml` declares which HOME-relative files are public. It is collected into a `public.zip` in two places: at **build** time `cmd/module` collects the files from the profile directory (so a fresh module ships its authored initial state — skills, persona, ...), and at **Export** time the running agent's current files are collected from its live workspace (so a clone carries evolved state). Either way `public.zip` is packed into the module and seeded into a fresh workspace on spawn. There is no Import.
 
 ### Data-flow overview
 
@@ -96,7 +96,7 @@ The schema is defined in [`vmdocker/modulebuild/profile.go`](../vmdocker/moduleb
 
 | Key | Required | Type | Meaning |
 |---|---|---|---|
-| `public` | ⬜ | []string | Exportable path allowlist (used by `Export`/clone). Each entry **must start with `~/`** and is a HOME-relative glob |
+| `public` | ⬜ | []string | Public path allowlist, collected into `public.zip` at build (from the profile dir) and at Export (from the live workspace), then seeded on spawn. Each entry **must start with `~/`** and is a HOME-relative glob |
 
 `public` matching rules (see [`vmdocker/capability/publicmatch.go`](../vmdocker/capability/publicmatch.go)):
 
@@ -255,7 +255,7 @@ See [`vmdocker/modulebuild/build.go`](../vmdocker/modulebuild/build.go) and [`mo
 2. **`docker build`** — the tag defaults to `vmdocker-module:<hash>` where `<hash>` is the first 12 hex of the Dockerfile's sha256.
 3. **Inspect the image id.**
 4. **`docker save | gzip`** → `image.tar.gz`.
-5. **`PackModule`** — assemble a container-tar of `image.tar.gz` + `profile.toml` (+ optional `public.zip`), gzip it into `ModuleBytes`, and emit the extension tags.
+5. **Collect public + `PackModule`** — `cmd/module` collects the profile dir's `[vmdocker].public` files into a `public.zip` (via `capability.CollectPublic` + `BuildPublicZip`); `PackModule` assembles a container-tar of `image.tar.gz` + `profile.toml` + `public.zip`, gzips it into `ModuleBytes`, and emits the extension tags.
 6. **Sign and save** — `cmd/module` uses a goether key + goar bundler through the hymx SDK `SaveModule`, producing `mod-<id>.json`.
 
 Module tags emitted by `PackModule`:

@@ -81,7 +81,7 @@ myagent/
 ├── bin/                 # 你的可执行文件;整个目录 COPY 到 /usr/local/bin(并 +x)
 │   └── .keep            # 即使没有可执行文件也留个 .keep 保住目录
 ├── start.sh             # 运行时启动钩子(不是容器 ENTRYPOINT)
-├── skills/              # public 内容(Export 导出、spawn 时种入)
+├── skills/              # public 内容(build 从这里采集打进 module,spawn 时种入;Export 从活 workspace 采集)
 │   └── soul.md
 ├── persona/
 │   └── style.md
@@ -122,7 +122,8 @@ tools = ["ripgrep", "jq"]
 RUN = ["echo built-from-profile > /home/hymx/.build-marker"]
 
 [vmdocker]
-# 相对 HOME 的导出白名单。Export 原样导出、spawn 时叠加进全新 workspace。
+# HOME 相对的 public 白名单。build 时 cmd/module 从 profile 目录采集、Export 时从活 workspace 采集,
+# 两者都打进 public.zip,spawn 时叠加进全新 workspace。
 #   "~/目录/*" = 目录(递归);  "~/文件" = 单个文件。
 # HOME 里没列进来的一切都是私有的,永不导出。
 public = ["~/skills/*", "~/persona/*", "~/investment.md"]

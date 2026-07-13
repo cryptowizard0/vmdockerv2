@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/cryptowizard0/vmdockerv2/vmdocker/capability"
 	"github.com/cryptowizard0/vmdockerv2/vmdocker/modulebuild"
 	"github.com/everFinance/goether"
 	hymxSchema "github.com/hymatrix/hymx/schema"
@@ -36,11 +37,26 @@ func main() {
 		fatal("-agent-bin (platform B2 artifact) is required; set VMDOCKER_AGENT_BIN in .env")
 	}
 
+	// Collect the profile's [vmdocker].public files into public.zip so the built
+	// module ships its initial public state (skills, persona, ...). Without this,
+	// the allowlist is inert at build time and public content only ever appears
+	// via a later Export — the profile dir's files would be silently dropped.
+	profileDir := filepath.Dir(*profilePath)
+	publicZip, col, err := collectProfilePublicZip(profileDir, profileTOML)
+	if err != nil {
+		fatal("collect public: %v", err)
+	}
+	fmt.Printf("[module] collected %d public file(s), %d bytes\n", len(col.Entries), col.TotalBytes)
+	for _, w := range col.Warnings {
+		fmt.Printf("[module] public warning: %s\n", w)
+	}
+
 	fmt.Println("[module] building module artifact from profile")
 	artifact, err := modulebuild.BuildModuleArtifact(context.Background(), modulebuild.BuildOptions{
 		ProfileTOML:  profileTOML,
-		ProfileDir:   filepath.Dir(*profilePath),
+		ProfileDir:   profileDir,
 		AgentBinPath: *agentBin,
+		PublicZip:    publicZip,
 	})
 	if err != nil {
 		fatal("build module artifact: %v", err)
@@ -60,6 +76,26 @@ func main() {
 		fatal("save module: %v", err)
 	}
 	fmt.Printf("[module] saved module %s -> mod-%s.json\n", itemID, itemID)
+}
+
+// collectProfilePublicZip collects the profile's [vmdocker].public files from
+// the profile directory into a public.zip (and a preview), mirroring what
+// Export does from a live workspace. This is what puts the author's initial
+// skills/persona/... into the built module so spawn seeds them.
+func collectProfilePublicZip(profileDir string, profileTOML []byte) ([]byte, capability.Collection, error) {
+	profile, err := modulebuild.ParseProfile(profileTOML)
+	if err != nil {
+		return nil, capability.Collection{}, err
+	}
+	col, err := capability.CollectPublic(profileDir, profile.Vmdocker.Public)
+	if err != nil {
+		return nil, capability.Collection{}, err
+	}
+	publicZip, err := capability.BuildPublicZip(profileDir, profile.Vmdocker.Public)
+	if err != nil {
+		return nil, capability.Collection{}, err
+	}
+	return publicZip, col, nil
 }
 
 func newSDK() (*sdk.SDK, error) {
