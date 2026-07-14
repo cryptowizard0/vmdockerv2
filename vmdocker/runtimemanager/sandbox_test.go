@@ -95,8 +95,8 @@ func TestSandboxManagerCreateAndStartInstanceUsesTemplateWorkflow(t *testing.T) 
 	if !strings.Contains(log, "-e XDG_STATE_HOME="+filepath.Join(containerHome, ".xdg", "state")) {
 		t.Fatalf("expected sandbox exec to inject XDG_STATE_HOME, got:\n%s", log)
 	}
-	if !strings.Contains(log, defaultRuntimeStartCommand) {
-		t.Fatalf("expected default runtime start command in log, got:\n%s", log)
+	if !strings.Contains(log, "/usr/local/bin/vmdocker-agent") {
+		t.Fatalf("expected the adapter entrypoint in the launch command, got:\n%s", log)
 	}
 	launchCommand, err := buildSandboxLaunchCommand([]string{"/usr/local/bin/vmdocker-agent"}, []string{"node", "init.js"})
 	if err != nil {
@@ -425,17 +425,6 @@ func TestSandboxManagerRemoveInstancePreservesWorkspace(t *testing.T) {
 	}
 }
 
-func TestBuildBackgroundRuntimeCommandUsesConfiguredRuntimeCommand(t *testing.T) {
-	command, err := buildBackgroundRuntimeCommand("/app/custom-entrypoint --serve")
-	if err != nil {
-		t.Fatalf("buildBackgroundRuntimeCommand failed: %v", err)
-	}
-	expected := "mkdir -p \"${TMPDIR:-/tmp}\" && '/app/custom-entrypoint' '--serve' >\"${TMPDIR:-/tmp}/vmdocker-agent.log\" 2>&1 &"
-	if command != expected {
-		t.Fatalf("buildBackgroundRuntimeCommand() = %q, want %q", command, expected)
-	}
-}
-
 func TestBuildSandboxLaunchCommand(t *testing.T) {
 	// exec form: image ENTRYPOINT (adapter) + CMD (author command).
 	command, err := buildSandboxLaunchCommand([]string{"/usr/local/bin/vmdocker-agent"}, []string{"node", "init.js"})
@@ -467,9 +456,6 @@ func TestSandboxManagerStartInstanceLaunchesImageEntrypointAndCmd(t *testing.T) 
 
 	spec := schema.RuntimeSpec{
 		Backend: schema.RuntimeBackendSandbox,
-		// Start-Command / Sandbox.Command are ignored now; the launch command
-		// comes from the image's baked ENTRYPOINT + CMD.
-		StartCommand: "/app/ignored.sh",
 		Image: schema.ImageInfo{
 			Name: "chriswebber/docker-openclaw-sandbox:test",
 			SHA:  "sha256:expected",
@@ -478,7 +464,6 @@ func TestSandboxManagerStartInstanceLaunchesImageEntrypointAndCmd(t *testing.T) 
 			Agent:     "shell",
 			Workspace: filepath.Join(tempDir, "workspace"),
 			Name:      "runtime-pid-6",
-			Command:   "legacy-sandbox-command",
 		},
 	}
 
@@ -495,16 +480,13 @@ func TestSandboxManagerStartInstanceLaunchesImageEntrypointAndCmd(t *testing.T) 
 	}
 	log := string(raw)
 	// The fake docker inspect returns ENTRYPOINT=[adapter] + CMD=[node init.js];
-	// the sandbox must launch exactly that, not Start-Command / Sandbox.Command.
+	// the sandbox must launch exactly that.
 	expectedCommand, err := buildSandboxLaunchCommand([]string{"/usr/local/bin/vmdocker-agent"}, []string{"node", "init.js"})
 	if err != nil {
 		t.Fatalf("buildSandboxLaunchCommand failed: %v", err)
 	}
 	if !strings.Contains(log, expectedCommand) {
 		t.Fatalf("expected image-derived sandbox command in log, got:\n%s", log)
-	}
-	if strings.Contains(log, "ignored.sh") || strings.Contains(log, "legacy-sandbox-command") {
-		t.Fatalf("Start-Command / Sandbox-Command must be ignored, got:\n%s", log)
 	}
 }
 

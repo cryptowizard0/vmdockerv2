@@ -68,8 +68,7 @@ func handleRestoreFailure(rollbackWorkspace func() error, restorePreviousRuntime
 
 func cloneRuntimeSpec(spec runtimeSchema.RuntimeSpec) runtimeSchema.RuntimeSpec {
 	return runtimeSchema.RuntimeSpec{
-		Backend:      spec.Backend,
-		StartCommand: spec.StartCommand,
+		Backend: spec.Backend,
 		Image: runtimeSchema.ImageInfo{
 			Name:          spec.Image.Name,
 			SHA:           spec.Image.SHA,
@@ -81,7 +80,6 @@ func cloneRuntimeSpec(spec runtimeSchema.RuntimeSpec) runtimeSchema.RuntimeSpec 
 			Workspace: spec.Sandbox.Workspace,
 			Network:   spec.Sandbox.Network,
 			Name:      spec.Sandbox.Name,
-			Command:   spec.Sandbox.Command,
 		},
 	}
 }
@@ -107,11 +105,9 @@ func normalizeRuntimeSpecWorkspaceRoot(spec runtimeSchema.RuntimeSpec, targetWor
 
 func hasRuntimeSpec(spec runtimeSchema.RuntimeSpec) bool {
 	return strings.TrimSpace(spec.Backend) != "" ||
-		strings.TrimSpace(spec.StartCommand) != "" ||
 		strings.TrimSpace(spec.Image.Name) != "" ||
 		strings.TrimSpace(spec.Image.SHA) != "" ||
 		strings.TrimSpace(spec.Sandbox.Agent) != "" ||
-		strings.TrimSpace(spec.Sandbox.Command) != "" ||
 		strings.TrimSpace(spec.Sandbox.Network) != "" ||
 		strings.TrimSpace(spec.Sandbox.Name) != ""
 }

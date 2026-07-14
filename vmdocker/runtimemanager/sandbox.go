@@ -406,3 +406,18 @@ func buildSandboxLaunchCommand(entrypoint, cmd []string) (string, error) {
 	}
 	return fmt.Sprintf("mkdir -p \"${TMPDIR:-/tmp}\" && %s >\"${TMPDIR:-/tmp}/vmdocker-agent.log\" 2>&1 &", shellEscapeCommand(argv)), nil
 }
+
+func shellEscapeCommand(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, shellEscapeArg(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellEscapeArg(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}

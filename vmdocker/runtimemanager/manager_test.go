@@ -234,25 +234,6 @@ func TestGetRuntimeManagerLinuxRejectsSandbox(t *testing.T) {
 	assert.EqualError(t, err, "runtime backend sandbox is not supported on linux")
 }
 
-func TestBuildForegroundRuntimeCommandUsesConfiguredRuntimeCommand(t *testing.T) {
-	args, err := buildForegroundRuntimeCommand("/app/custom-entrypoint --serve")
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"/app/custom-entrypoint", "--serve"}, args)
-
-	args, err = buildForegroundRuntimeCommand(`/app/custom-entrypoint --label "hello world"`)
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"/app/custom-entrypoint", "--label", "hello world"}, args)
-
-	args, err = buildForegroundRuntimeCommand("")
-	assert.NoError(t, err)
-	assert.Equal(t, []string{defaultRuntimeStartCommand}, args)
-}
-
-func TestBuildForegroundRuntimeCommandRejectsInvalidQuotedCommand(t *testing.T) {
-	_, err := buildForegroundRuntimeCommand(`"/app/custom-entrypoint`)
-	assert.EqualError(t, err, "unterminated quoted string in start command")
-}
-
 func TestBuildDockerContainerConfigInheritsImageEntrypointAndCmd(t *testing.T) {
 	runtimeEnv := appendRuntimePersistenceEnv([]string{"OPENCLAW_GATEWAY_TOKEN=test-token"}, "/tmp/runtime-workspace/pid-1")
 	config := buildDockerContainerConfig(schema.RuntimeSpec{

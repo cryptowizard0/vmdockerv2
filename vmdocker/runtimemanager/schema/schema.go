@@ -18,11 +18,9 @@ const (
 
 const (
 	RuntimeBackendTag = "Runtime-Backend"
-	StartCommandTag   = "Start-Command"
 	SandboxAgentTag   = "Sandbox-Agent"
 	SandboxNetworkTag = "Sandbox-Network"
 	SandboxNameTag    = "Sandbox-Name"
-	SandboxCommandTag = "Sandbox-Command"
 )
 
 const (
@@ -51,14 +49,12 @@ type SandboxSpec struct {
 	Workspace string
 	Network   string
 	Name      string
-	Command   string
 }
 
 type RuntimeSpec struct {
-	Backend      string
-	StartCommand string
-	Image        ImageInfo
-	Sandbox      SandboxSpec
+	Backend string
+	Image   ImageInfo
+	Sandbox SandboxSpec
 }
 
 type InstanceInfo struct {
