@@ -52,3 +52,4 @@ go.sum
 # local test scaffolding.
 /module
 /testagent/
+/.scratch
