@@ -183,17 +183,7 @@ func (dm *DockerManager) CreateInstance(ctx context.Context, pid string, runtime
 
 	hostConfig := buildDockerHostConfig(port, workspace, tmpDir)
 
-	startCommand, err := buildForegroundRuntimeCommand(runtimeSpec.StartCommand)
-	if err != nil {
-		dm.portAllocator.Release(port)
-		return nil, fmt.Errorf("build docker start command failed: %w", err)
-	}
-
-	config, err := buildDockerContainerConfig(runtimeSpec, runtimeEnv, startCommand, workspace)
-	if err != nil {
-		dm.portAllocator.Release(port)
-		return nil, err
-	}
+	config := buildDockerContainerConfig(runtimeSpec, runtimeEnv)
 
 	resp, err := dm.cli.ContainerCreate(ctx, config, hostConfig, nil, nil, ContainerNamePrefix+pid)
 	if err != nil {
@@ -276,22 +266,20 @@ func (dm *DockerManager) StopInstance(ctx context.Context, pid string) error {
 	return nil
 }
 
-func buildDockerContainerConfig(runtimeSpec schema.RuntimeSpec, runtimeEnv, startCommand []string, workspace string) (*container.Config, error) {
-	if len(startCommand) == 0 {
-		return nil, fmt.Errorf("docker start command is empty")
-	}
-
+// buildDockerContainerConfig builds the container config for a docker-backed
+// spawn. It deliberately leaves Entrypoint and Cmd unset so the container runs
+// the image's baked ENTRYPOINT (the vmdocker-agent adapter) and CMD (the author
+// command from [dockerfile].CMD) — the spawn must not override either.
+func buildDockerContainerConfig(runtimeSpec schema.RuntimeSpec, runtimeEnv []string) *container.Config {
 	return &container.Config{
-		Image:      runtimeSpec.Image.Name,
-		User:       schema.RuntimeUser,
-		Entrypoint: []string{startCommand[0]},
+		Image: runtimeSpec.Image.Name,
+		User:  schema.RuntimeUser,
 		ExposedPorts: nat.PortSet{
 			nat.Port(schema.ExprotPort): struct{}{},
 		},
-		Cmd:        startCommand[1:],
 		Env:        runtimeEnv,
 		WorkingDir: containerHome,
-	}, nil
+	}
 }
 
 func buildDockerHostConfig(port int, workspace, tmpDir string) *container.HostConfig {

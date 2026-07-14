@@ -46,10 +46,7 @@ func TestBuildDockerHostConfigMountsWritableTmp(t *testing.T) {
 
 func TestBuildDockerContainerConfigRunsNonRoot(t *testing.T) {
 	spec := schema.RuntimeSpec{Image: schema.ImageInfo{Name: "img"}}
-	cfg, err := buildDockerContainerConfig(spec, nil, []string{"/app/main"}, t.TempDir())
-	if err != nil {
-		t.Fatalf("build config: %v", err)
-	}
+	cfg := buildDockerContainerConfig(spec, nil)
 	if cfg.User != schema.RuntimeUser {
 		t.Fatalf("User = %q, want %q", cfg.User, schema.RuntimeUser)
 	}
