@@ -10,7 +10,6 @@ const claudeExportProfileTOML = `
 [dockerfile]
 FROM = "docker/sandbox-templates:claude-code"
 bin = "bin"
-startup = "start.sh"
 
 [vmdocker]
 public = ["~/skills/*"]
@@ -27,7 +26,7 @@ func writeExportFile(t *testing.T, path, content string) {
 }
 
 // TestExport_ReusesProvidedImage verifies Option A: Export packages the given
-// image archive as-is (no docker rebuild — note there is no bin/ or start.sh in
+// image archive as-is (no docker rebuild — note there is no bin/ in
 // the workspace) together with a public.zip freshly collected from the live
 // workspace.
 func TestExport_ReusesProvidedImage(t *testing.T) {

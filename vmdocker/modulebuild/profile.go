@@ -22,7 +22,10 @@ type DockerfileSection struct {
 	Bin     string   `toml:"bin"`     // user executables dir, COPY'd to /usr/local/bin
 	Tools   []string `toml:"tools"`   // packages to install
 	Run     []string `toml:"RUN"`     // custom RUN args (without the RUN prefix)
-	Startup string   `toml:"startup"` // user startup hook, not the container ENTRYPOINT
+	// CMD is the module's startup command, mirroring Dockerfile CMD syntax: a
+	// string is shell form, an array of strings is exec form. It is baked as the
+	// image CMD and run by the adapter (which stays the ENTRYPOINT). Optional.
+	CMD any `toml:"CMD"`
 }
 
 // VmdockerSection maps to [vmdocker]; consumed by runtime Export/Import (P4).
@@ -42,6 +45,9 @@ func ParseProfile(data []byte) (Profile, error) {
 	}
 	if strings.TrimSpace(p.Dockerfile.From) == "" {
 		return Profile{}, fmt.Errorf("profile [dockerfile].FROM is required")
+	}
+	if _, err := renderCMD(p.Dockerfile.CMD); err != nil {
+		return Profile{}, err
 	}
 	return p, nil
 }

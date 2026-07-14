@@ -12,7 +12,7 @@ func TestGenerateDockerfile(t *testing.T) {
 			Bin:     "bin",
 			Tools:   []string{"curl", "jq"},
 			Run:     []string{"pip install --no-cache-dir foo"},
-			Startup: "startup.sh",
+			CMD:     []string{"claude", "--serve"},
 		},
 	}
 	out, err := GenerateDockerfile(DockerfileInput{
@@ -26,7 +26,6 @@ func TestGenerateDockerfile(t *testing.T) {
 		"FROM docker/sandbox-templates:shell",
 		"COPY platform/vmdocker-agent /usr/local/bin/vmdocker-agent",
 		"COPY bin/ /usr/local/bin/",
-		"COPY startup.sh /usr/local/lib/vmdocker-agent/user-startup.sh",
 		"COPY profile.toml /home/hymx/profile.toml",
 		"RUN pip install --no-cache-dir foo",
 		"useradd",
@@ -34,6 +33,7 @@ func TestGenerateDockerfile(t *testing.T) {
 		"USER hymx",
 		"WORKDIR /home/hymx",
 		`ENTRYPOINT ["/usr/local/bin/vmdocker-agent"]`,
+		`CMD ["claude","--serve"]`,
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(out, want) {
@@ -47,14 +47,14 @@ func TestGenerateDockerfile(t *testing.T) {
 	if strings.Contains(out, "start-vmdocker-agent.sh") {
 		t.Error("wrapper must no longer be referenced")
 	}
-	if strings.Contains(out, `ENTRYPOINT ["/usr/local/bin/startup.sh"]`) {
-		t.Error("user startup.sh must not become the container ENTRYPOINT")
+	if strings.Contains(out, "user-startup.sh") {
+		t.Error("user startup hook must no longer be COPY'd; the command is the image CMD")
 	}
 }
 
 func TestGenerateDockerfileUsesFromVerbatim(t *testing.T) {
 	profile := Profile{Dockerfile: DockerfileSection{
-		From: "ghcr.io/acme/custom-agent:v1.2.3", Bin: "bin", Startup: "start.sh",
+		From: "ghcr.io/acme/custom-agent:v1.2.3", Bin: "bin",
 	}}
 	out, err := GenerateDockerfile(DockerfileInput{
 		Profile:     profile,
@@ -72,13 +72,13 @@ func TestGenerateDockerfileUsesFromVerbatim(t *testing.T) {
 	if strings.Contains(out, "RUNTIME_TYPE") {
 		t.Fatalf("RUNTIME_TYPE must not be baked:\n%s", out)
 	}
-	if !strings.Contains(out, "user-startup.sh") {
-		t.Fatalf("startup COPY dropped:\n%s", out)
+	if strings.Contains(out, "user-startup.sh") {
+		t.Fatalf("user-startup.sh must no longer be referenced:\n%s", out)
 	}
 }
 
 func TestGenerateDockerfileRequiresFrom(t *testing.T) {
-	profile := Profile{Dockerfile: DockerfileSection{Bin: "bin", Startup: "start.sh"}}
+	profile := Profile{Dockerfile: DockerfileSection{Bin: "bin"}}
 	if _, err := GenerateDockerfile(DockerfileInput{Profile: profile, AgentBinSrc: "platform/vmdocker-agent"}); err == nil {
 		t.Fatal("expected error when FROM is empty")
 	}

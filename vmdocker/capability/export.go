@@ -20,7 +20,7 @@ import (
 // ExportOptions configures module packing and signing for Export.
 //
 // Export reuses the agent's existing image (the one it was spawned from) rather
-// than rebuilding from profile.toml: the image-build inputs (bin/, start.sh)
+// than rebuilding from profile.toml: the image-build inputs (bin/, CMD)
 // live baked in the image at /usr/local/*, not in the runtime workspace, so a
 // rebuild from the live workspace is impossible. The caller reads image.tar.gz
 // out of the running process's module and passes it here.
@@ -39,7 +39,7 @@ type ExportResult struct {
 
 // Export freshly collects public.zip from the live workspace, packs it together
 // with the reused image.tar.gz and the current profile.toml, and returns a
-// signed V2 module JSON. The program (image, incl. bin/ and start.sh) is carried
+// signed V2 module JSON. The program (image, incl. bin/ and the CMD) is carried
 // over unchanged; only the public state is re-captured at export time.
 func Export(home string, opts ExportOptions) (ExportResult, error) {
 	profilePath := filepath.Join(home, "profile.toml")

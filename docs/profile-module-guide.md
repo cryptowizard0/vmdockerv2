@@ -13,8 +13,8 @@
 cd ../vmdocker_agent
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/vmdocker-agent .
 
-# 2) Write a profile.toml (see §2), next to its bin/ dir and startup script
-#    mymod/{profile.toml, bin/, start.sh}
+# 2) Write a profile.toml (see §2), next to its bin/ dir
+#    mymod/{profile.toml, bin/}
 
 # 3) Build and sign it into a module (see §3)
 cd ../vmdockerv2
@@ -36,7 +36,7 @@ vmdockerv2 is the Docker-backed sandbox VM for the HyMatrix compute network. Com
 
 Core ideas:
 
-1. **Declarative, single input.** You only write `profile.toml` (pick a base image, drop in a few executables, one startup script, optional packages). The builder **generates a standardized, hardened Dockerfile** from it — you never hand-write a Dockerfile. Hardening includes: a fixed container `ENTRYPOINT` (the `vmdocker-agent` adapter), a non-privileged `hymx` user, removal from the `sudo`/`docker` groups, a read-only root filesystem, and so on.
+1. **Declarative, single input.** You only write `profile.toml` (pick a base image, drop in a few executables, an optional startup command, optional packages). The builder **generates a standardized, hardened Dockerfile** from it — you never hand-write a Dockerfile. Hardening includes: a fixed container `ENTRYPOINT` (the `vmdocker-agent` adapter), a non-privileged `hymx` user, removal from the `sudo`/`docker` groups, a read-only root filesystem, and so on.
 
 2. **The image travels with the module (self-contained).** The build does `docker save | gzip` into `image.tar.gz` and packs it — together with `profile.toml` (and an optional `public.zip`) — into one **container-tar** that is the module payload. On spawn, if the local Docker has no matching image, it is restored from the module payload via `docker image load` — there is **no build at spawn time**. Archive-format constant: `container-tar+image.tar.gz`.
 
@@ -49,7 +49,7 @@ Core ideas:
 ### Data-flow overview
 
 ```
- profile.toml + bin/ + startup + platform/vmdocker-agent
+ profile.toml + bin/ + platform/vmdocker-agent
         │   modulebuild.BuildModuleArtifact  (cmd/module)
         ▼
  generate standardized Dockerfile ─► docker build ─► docker save|gzip ─► image.tar.gz
@@ -64,7 +64,7 @@ Core ideas:
    ensureModuleImageAvailable → docker image load when the image is missing
    CreateInstance            → workspace = sandbox_workspace/<pid>
    seedWorkspaceFromModule   → write profile.toml + unpack public.zip into the workspace
-   StartInstance             → container ENTRYPOINT=vmdocker-agent → runs user-startup.sh → ready
+   StartInstance             → container ENTRYPOINT=vmdocker-agent → runs the image CMD (if any) → ready
 ```
 
 ---
@@ -81,7 +81,7 @@ The schema is defined in [`vmdocker/modulebuild/profile.go`](../vmdocker/moduleb
 |---|---|---|---|
 | `FROM` | ✅ | string | **Full base image name**, used verbatim as the Dockerfile `FROM` (e.g. `docker/sandbox-templates:claude-code`, `ghcr.io/acme/agent:v1`). No alias mapping |
 | `bin` | ✅ | string | A directory name; its executables are `COPY {bin}/ → /usr/local/bin/` |
-| `startup` | ✅ | string | Your startup script; `COPY → /usr/local/lib/vmdocker-agent/user-startup.sh`. **It is your hook, not the container ENTRYPOINT** |
+| `CMD` | ⬜ | string \| []string | Your startup command in Dockerfile `CMD` syntax — a string is shell form, an array is exec form. Baked as the image `CMD` and run by the adapter (which stays the `ENTRYPOINT`). Optional; omit for a no-op module |
 | `tools` | ⬜ | []string | System packages to install; the build auto-detects `apt-get`/`apk`/`microdnf` |
 | `RUN` | ⬜ | []string | Extra Dockerfile `RUN` instructions **without the `RUN` prefix**; each renders as one line |
 
@@ -116,18 +116,17 @@ public = [
 ]
 ```
 
-> Validation timing: `ParseProfile` only enforces that `[dockerfile].FROM` is non-empty; the non-empty checks for `bin`/`startup` happen when the Dockerfile is generated (`GenerateDockerfile`). So the **three required keys are `FROM`, `bin`, `startup`**.
+> Validation timing: `ParseProfile` enforces that `[dockerfile].FROM` is non-empty and that `CMD` (if present) is a string or a string array; the non-empty check for `bin` happens when the Dockerfile is generated (`GenerateDockerfile`). So the **two required keys are `FROM` and `bin`** — `CMD` is optional.
 
 ### 2.2 Directory layout
 
-The directory holding `profile.toml` (the build-time `ProfileDir`) must also carry the `bin` dir and the `startup` script:
+The directory holding `profile.toml` (the build-time `ProfileDir`) must also carry the `bin` dir:
 
 ```
 mymod/
 ├── profile.toml
 ├── bin/                 # the [dockerfile].bin dir; put executables here
 │   └── .keep            # may be empty, but the dir must exist
-├── start.sh             # the [dockerfile].startup script
 └── skills/              # optional: content declared by [vmdocker].public
     └── soul.md
 ```
@@ -141,16 +140,10 @@ From the real e2e fixture in [`vmdocker/realspawn_e2e_test.go`](../vmdocker/real
 [dockerfile]
 FROM = "docker/sandbox-templates:claude-code"
 bin = "bin"
-startup = "start.sh"
+# CMD optional; claude readiness is CLI-on-PATH, so omit it for a no-op module.
 
 [vmdocker]
 public = ["~/skills/*"]
-```
-
-```sh
-# mymod/start.sh — your startup hook (claude readiness is CLI-on-PATH, so a no-op is fine)
-#!/bin/sh
-exit 0
 ```
 
 A more practical example (install tools + custom RUN):
@@ -159,7 +152,7 @@ A more practical example (install tools + custom RUN):
 [dockerfile]
 FROM = "docker/sandbox-templates:shell"
 bin = "bin"
-startup = "start.sh"
+CMD = ["/usr/local/bin/my-engine", "--serve"]
 tools = ["git", "jq", "ripgrep"]
 RUN = [
   "mkdir -p /home/hymx/skills",
@@ -181,7 +174,6 @@ WORKDIR /app
 
 COPY platform/vmdocker-agent /usr/local/bin/vmdocker-agent
 COPY bin/ /usr/local/bin/
-COPY start.sh /usr/local/lib/vmdocker-agent/user-startup.sh
 COPY profile.toml /home/hymx/profile.toml
 RUN set -eux; \
     useradd --create-home --home-dir /home/hymx --shell /bin/bash hymx || true; \
@@ -189,7 +181,7 @@ RUN set -eux; \
     gpasswd -d hymx docker || true; \
     rm -f /etc/sudoers.d/*
 RUN set -eux; \
-    chmod +x /usr/local/bin/* /usr/local/lib/vmdocker-agent/user-startup.sh; \
+    chmod +x /usr/local/bin/*; \
     chown -R hymx:hymx /home/hymx /app
 ENV HOME=/home/hymx
 USER hymx
@@ -197,12 +189,14 @@ WORKDIR /home/hymx
 ENTRYPOINT ["/usr/local/bin/vmdocker-agent"]
 ```
 
+(If the profile sets `CMD`, a `CMD [...]` line follows the `ENTRYPOINT` — the §2.3 example omits it.)
+
 (`RUNTIME_TYPE` is no longer baked here — it is a spawn-time
 `Container-Env-RUNTIME_TYPE` tag.)
 
 - With `tools` set, an adaptive `apt-get`/`apk`/`microdnf` install `RUN` is inserted in the middle.
 - With `RUN` set, each entry renders as its own `RUN <your command>` line.
-- The container entrypoint is always `vmdocker-agent` (the platform adapter); your `start.sh` is invoked by the adapter as `user-startup.sh`.
+- The container entrypoint is always `vmdocker-agent` (the platform adapter); your `[dockerfile].CMD`, if set, is baked as the image `CMD` and run by the adapter. With no `CMD`, the adapter runs no user command.
 
 ---
 
@@ -245,14 +239,14 @@ Flags:
 
 | Flag | Default | Description |
 |---|---|---|
-| `-profile` | `profile.toml` | Path to profile.toml; its directory is the `ProfileDir` (`bin/`, `startup` are read from here) |
+| `-profile` | `profile.toml` | Path to profile.toml; its directory is the `ProfileDir` (`bin/` is read from here) |
 | `-agent-bin` | `$VMDOCKER_AGENT_BIN` | Path to the platform adapter binary, **required** |
 
 ### 3.4 What happens internally (`BuildModuleArtifact`)
 
 See [`vmdocker/modulebuild/build.go`](../vmdocker/modulebuild/build.go) and [`module.go`](../vmdocker/modulebuild/module.go):
 
-1. **Stage the build context** — `ParseProfile` → `GenerateDockerfile`; create a temp dir, write `Dockerfile` and `profile.toml`, copy `bin/`, `startup`, and `platform/vmdocker-agent`.
+1. **Stage the build context** — `ParseProfile` → `GenerateDockerfile`; create a temp dir, write `Dockerfile` and `profile.toml`, copy `bin/` and `platform/vmdocker-agent`.
 2. **`docker build`** — the tag defaults to `vmdocker-module:<hash>` where `<hash>` is the first 12 hex of the Dockerfile's sha256.
 3. **Inspect the image id.**
 4. **`docker save | gzip`** → `image.tar.gz`.
@@ -386,7 +380,7 @@ docker image rm <Image-Name>     # remove the local image
 
 ## 5. Cheat sheet
 
-**Three required keys (profile.toml):** `[dockerfile].FROM` + `[dockerfile].bin` + `[dockerfile].startup`.
+**Two required keys (profile.toml):** `[dockerfile].FROM` + `[dockerfile].bin`. `[dockerfile].CMD` is optional — Dockerfile `CMD` syntax (string = shell form, array = exec form).
 
 **`FROM`:** a full base image name, used verbatim (no alias mapping). `RUNTIME_TYPE` is set at spawn via the `Container-Env-RUNTIME_TYPE` tag, not in profile.toml.
 

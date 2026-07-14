@@ -9,7 +9,7 @@ FROM = "docker/sandbox-templates:shell"
 bin = "bin"
 tools = ["curl", "ripgrep"]
 RUN = ["pip install --no-cache-dir foo"]
-startup = "startup.sh"
+CMD = ["start.sh", "--serve"]
 
 [vmdocker]
 public = ["skills", "persona"]
@@ -30,8 +30,8 @@ public = ["skills", "persona"]
 	if len(p.Dockerfile.Run) != 1 || p.Dockerfile.Run[0] != "pip install --no-cache-dir foo" {
 		t.Fatalf("Run = %v", p.Dockerfile.Run)
 	}
-	if p.Dockerfile.Startup != "startup.sh" {
-		t.Fatalf("Startup = %q, want startup.sh", p.Dockerfile.Startup)
+	if arr, ok := p.Dockerfile.CMD.([]any); !ok || len(arr) != 2 || arr[0] != "start.sh" {
+		t.Fatalf("CMD = %#v, want [start.sh --serve]", p.Dockerfile.CMD)
 	}
 	if len(p.Vmdocker.Public) != 2 || p.Vmdocker.Public[1] != "persona" {
 		t.Fatalf("Public = %v, want [skills persona]", p.Vmdocker.Public)

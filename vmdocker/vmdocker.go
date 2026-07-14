@@ -713,7 +713,7 @@ func (v *VmDocker) applyCapabilityExport(meta vmmSchema.Meta) *vmmSchema.Result 
 		return &vmmSchema.Result{Output: col}
 	}
 	// Option A: reuse the running agent's existing image (the one it was spawned
-	// from) instead of rebuilding — the build inputs (bin/, start.sh) are baked in
+	// from) instead of rebuilding — the build inputs (bin/, CMD) are baked in
 	// the image, not the runtime workspace. RuntimeSpec.Image.SHA carries the
 	// original Image-ID; both tags must be non-empty for the exported module to
 	// spawn again.

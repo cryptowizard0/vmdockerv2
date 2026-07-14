@@ -229,7 +229,7 @@ func extractImageFromContainerTar(r io.Reader) (io.ReadCloser, error) {
 // readModuleImageArchive reads the image.tar.gz member out of a module's
 // container-tar payload and returns it fully in memory. Export (Option A) uses
 // it to reuse the running agent's existing image instead of rebuilding: the
-// image-build inputs (bin/, start.sh) live baked in the image, not in the
+// image-build inputs (bin/, CMD) live baked in the image, not in the
 // runtime workspace, so a rebuild is impossible — but the exact image bytes are
 // already in the module the process was spawned from.
 func readModuleImageArchive(moduleID, archiveFormat string) ([]byte, error) {

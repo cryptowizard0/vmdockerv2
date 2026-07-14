@@ -72,7 +72,7 @@ VMDOCKER_EXPORT_PID=
 
 ## profile 完整配置
 
-建一个自包含的 agent 目录。`[dockerfile].bin` 和 `[dockerfile].startup` 是**必填**(生成器强制);
+建一个自包含的 agent 目录。`[dockerfile].bin` 是**必填**(生成器强制),`[dockerfile].CMD` 可选;
 `FROM` 填**完整镜像名**,原样作为 Dockerfile 的 FROM(不再做别名映射)。RUNTIME_TYPE 不在 profile 里
 —— 它是 spawn 时的 `Container-Env-RUNTIME_TYPE` tag(examples 从 `.env` 的 `RUNTIME_TYPE` 读)。
 
@@ -81,7 +81,6 @@ myagent/
 ├── profile.toml
 ├── bin/                 # 你的可执行文件;整个目录 COPY 到 /usr/local/bin(并 +x)
 │   └── .keep            # 即使没有可执行文件也留个 .keep 保住目录
-├── start.sh             # 运行时启动钩子(不是容器 ENTRYPOINT)
 ├── skills/              # public 内容(build 从这里采集打进 module,spawn 时种入;Export 从活 workspace 采集)
 │   └── soul.md
 ├── persona/
@@ -113,8 +112,9 @@ FROM = "docker/sandbox-templates:claude-code"
 # 必填 —— 可以为空(留个 .keep 保证目录存在)。
 bin = "bin"
 
-# 你的启动钩子。adapter(PID 1)在后台跑它;它不是容器 ENTRYPOINT,也不能阻塞 adapter 启动。必填。
-startup = "start.sh"
+# 启动命令(可选,Dockerfile CMD 语法:字符串=shell 形式,数组=exec 形式)。
+# 烤进镜像 CMD,由 adapter(仍是 ENTRYPOINT)运行。no-op 模块直接不写。
+# CMD = ["your-engine", "--serve"]
 
 # 要安装的跨发行版工具包(可选;展开为一条包管理器 RUN)。
 tools = ["ripgrep", "jq"]
@@ -130,19 +130,15 @@ RUN = ["echo built-from-profile > /home/hymx/.build-marker"]
 public = ["~/skills/*", "~/persona/*", "~/investment.md"]
 ```
 
-### `myagent/start.sh`
+### 启动命令(可选)
 
-对 **claude**,就绪条件只是 `claude` 在 `PATH` 上,所以钩子可以是空操作:
+对 **claude**,就绪条件只是 `claude` 在 `PATH` 上,所以不用写 `CMD`(no-op 模块直接省略)。
 
-```sh
-#!/bin/sh
-# 作者钩子:在这里起引擎 / 种入状态,然后返回(引擎继续在后台跑)。
-# claude 的就绪 = 基础镜像自带的 `claude` CLI 在 PATH 上,所以空操作即可。
-exit 0
+对 **openclaw**,把网关启动命令写成 `CMD`(adapter 用它来判 `/vmm/health` 就绪)—— 具体网关命令看 openclaw 基础镜像,例如:
+
+```toml
+CMD = ["openclaw", "gateway", "--serve"]
 ```
-
-对 **openclaw**,在这里启动网关(adapter 用它来判 `/vmm/health` 就绪)—— 具体网关命令看 openclaw
-基础镜像。
 
 ### 一键创建
 
@@ -152,7 +148,6 @@ cat > /tmp/myagent/profile.toml <<'TOML'
 [dockerfile]
 FROM = "docker/sandbox-templates:claude-code"
 bin = "bin"
-startup = "start.sh"
 tools = ["ripgrep", "jq"]
 RUN = ["echo built-from-profile > /home/hymx/.build-marker"]
 
@@ -160,7 +155,6 @@ RUN = ["echo built-from-profile > /home/hymx/.build-marker"]
 public = ["~/skills/*", "~/persona/*", "~/investment.md"]
 TOML
 printf 'keep\n'              > /tmp/myagent/bin/.keep
-printf '#!/bin/sh\nexit 0\n' > /tmp/myagent/start.sh ; chmod +x /tmp/myagent/start.sh
 printf 'MY-SOUL\n'           > /tmp/myagent/skills/soul.md
 printf 'terse, precise\n'    > /tmp/myagent/persona/style.md
 printf 'thesis: X\n'         > /tmp/myagent/investment.md
@@ -232,7 +226,7 @@ go run ./examples export <A3 的 pid>       # 或在 .env 里设 VMDOCKER_EXPORT
 现采的 `public.zip` 打包成新 module → **节点把它写进自己的 module 目录**(`mod/mod-<ID2>.json`)→
 结果只返回 module id。client 读到 id 即可。
 
-> **Export 复用镜像,不重建。** 程序(镜像,含 `bin/`→`/usr/local/bin`、`start.sh`、tools、RUN 结果)
+> **Export 复用镜像,不重建。** 程序(镜像,含 `bin/`→`/usr/local/bin`、`CMD`、tools、RUN 结果)
 > 原样保留;只有 public 状态(skills/persona…)在 export 时从活 workspace 重新采集。所以**节点侧不需要
 > `VMDOCKER_AGENT_BIN`**(可选 `VMDOCKER_MODULE_SIGNER_KEY` 指定签名 key)。
 
@@ -288,7 +282,7 @@ VMDOCKER_AGENT_BIN=/Users/webbergao/work/src/HymxWorkspace/vmdocker_agent/build/
 - **`FROM` 是完整镜像名(原样用),不再有别名。** `RUNTIME_TYPE` 由 spawn 的
   `Container-Env-RUNTIME_TYPE` tag 提供(`.env` 的 `RUNTIME_TYPE` → examples 传);不传则 adapter 默认
   `test`(健康永远就绪)。要 claude 的"等 claude 在 PATH"门控,`.env` 里设 `RUNTIME_TYPE=claude`。
-- **`bin` 和 `startup` 必填。** 缺任一个,`GenerateDockerfile` 直接报错。
+- **`bin` 必填。** 缺它 `GenerateDockerfile` 直接报错;`CMD` 可选。
 - **用 vmdockerv2 的 `cmd/module`**,别用 `examples module`(后者指向已删除的
   `vmdocker_agent/cmd/module`)。
 - **backend 二选一(`RUNTIME_BACKEND`)。** 留空时 macOS 默认走 **sandbox**(`docker sandbox create`,
@@ -296,7 +290,7 @@ VMDOCKER_AGENT_BIN=/Users/webbergao/work/src/HymxWorkspace/vmdocker_agent/build/
   **docker container**(`docker run`,秒级,容器名是完整 pid,`docker exec`/`docker logs` 直接可用)——
   **推荐**。断言一律改成宿主侧读 bind-mount 的 workspace(与 backend 无关)。
 - **docker backend 的只读 rootfs + 可写 `/tmp`。** docker backend 用 `--read-only` 起容器,adapter 需要
-  可写 `/tmp`(start.sh 日志等),否则一启动就崩、容器 Exit(0)。节点已把宿主目录
+  可写 `/tmp`(启动命令日志等),否则一启动就崩、容器 Exit(0)。节点已把宿主目录
   `sandbox_workspace/<pid>-tmp` bind 到容器 `/tmp`,所以 `/tmp` 内容在宿主侧可查。
 - **`SendMessageAndWait` 没有 `res.Data`。** 它返回 `Response{Id, Message}`,结果在 `res.Message`
   (被序列化的 `vmmSchema.VmmResult`)里,解出来读 `.Data`(export 时是 module id)/ `.Error`。只有

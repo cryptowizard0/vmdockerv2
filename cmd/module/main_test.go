@@ -12,7 +12,7 @@ const testProfileTOML = `
 [dockerfile]
 FROM = "docker/sandbox-templates:claude-code"
 bin = "bin"
-startup = "start.sh"
+CMD = ["claude", "--serve"]
 
 [vmdocker]
 public = ["~/skills/*", "~/persona/*"]
