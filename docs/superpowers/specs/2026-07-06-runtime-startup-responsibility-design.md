@@ -1,6 +1,7 @@
 # Runtime Startup Responsibility Redesign
 
-- **Status:** Draft
+- **Status:** Draft (partially superseded — see below)
+- **Superseded in part by:** [ADR-0001 — profile `startup` → literal `CMD`](../../adr/0001-startup-to-cmd.md). The `[dockerfile].startup` → `user-startup.sh` COPY mechanism (§6.3, §8.1) is replaced by an inline `[dockerfile].CMD`; the rest of this design (adapter as PID 1 init, host-enforced confinement, health-gated readiness) still stands.
 - **Date:** 2026-07-06
 - **Owner:** vmdockerv2 / vmdocker_agent
 - **Repos in scope:** `vmdockerv2` (host + modulebuild), `vmdocker_agent` (adapter + startup scripts)
