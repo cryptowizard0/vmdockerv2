@@ -18,6 +18,8 @@ const (
 	sandboxTmpDirName                  = ".tmp"
 	sandboxXDGDirName                  = ".xdg"
 	containerHome                      = "/home/hymx"
+	containerTmp                       = "/tmp"
+	runtimeTmpDirSuffix                = "-tmp"
 	envOpenclawHome                    = "OPENCLAW_HOME"
 	envOpenclawStateDir                = "OPENCLAW_STATE_DIR"
 	envOpenclawConfigPath              = "OPENCLAW_CONFIG_PATH"
@@ -84,6 +86,25 @@ func resolveRuntimeWorkspace(pid, root string) (string, error) {
 
 func runtimeWorkspaceRootFromPath(workspace string) string {
 	return filepath.Dir(filepath.Dir(workspace))
+}
+
+// runtimeTmpDir returns the host directory bind-mounted at the container's
+// /tmp. It is a sibling of the pid workspace (e.g. sandbox_workspace/<pid>-tmp),
+// not nested inside it, so the container's writable /tmp never also appears
+// under /home/hymx and never lands in a full-workspace checkpoint/export.
+func runtimeTmpDir(workspace string) string {
+	return filepath.Join(filepath.Dir(workspace), filepath.Base(workspace)+runtimeTmpDirSuffix)
+}
+
+// ensureRuntimeTmpDir creates (0777) and returns the host /tmp bind-mount dir
+// for a pid workspace. The read-only-rootfs Docker backend has no writable
+// /tmp otherwise, which crashes the adapter's startup-hook logging.
+func ensureRuntimeTmpDir(workspace string) (string, error) {
+	tmpDir := runtimeTmpDir(workspace)
+	if err := ensureRuntimeWorkspaceDirs([]string{tmpDir}); err != nil {
+		return "", err
+	}
+	return tmpDir, nil
 }
 
 func appendRuntimePersistenceEnv(runtimeEnv []string, workspace string) []string {

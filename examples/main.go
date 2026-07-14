@@ -46,7 +46,7 @@ func initExampleSDK() {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("please input cmd, ex: pingpong, sendMessage, spawn, eval, eval2, receive, receive2, reply, inbox, result, checkpoint, ollama, recover1, recover2, openclaw_spawn, openclaw_chat, openclaw_tg, openclaw_pair, claude_spawn, claude_chat")
+		fmt.Println("please input cmd, ex: pingpong, sendMessage, spawn, export, eval, eval2, receive, receive2, reply, inbox, result, checkpoint, ollama, recover1, recover2, openclaw_spawn, openclaw_chat, openclaw_tg, openclaw_pair, claude_spawn, claude_chat")
 		os.Exit(1)
 	}
 
@@ -79,6 +79,8 @@ func main() {
 		genModule()
 	case "spawn":
 		spawn()
+	case "export":
+		exportProcess()
 	case "spawnChild":
 		spawnChild()
 	case "eval":

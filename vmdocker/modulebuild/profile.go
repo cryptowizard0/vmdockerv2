@@ -16,18 +16,25 @@ type Profile struct {
 }
 
 // DockerfileSection maps to [dockerfile]; keys mirror Dockerfile instructions
-// where one exists (FROM/RUN), plus convenience keys (bin/tools/startup).
+// where one exists (FROM/RUN/CMD), plus convenience keys (bin/tools).
 type DockerfileSection struct {
-	From    string   `toml:"FROM"`    // base image alias, resolved by ResolveFROM
+	From    string   `toml:"FROM"`    // full base image name, used verbatim as Dockerfile FROM
 	Bin     string   `toml:"bin"`     // user executables dir, COPY'd to /usr/local/bin
 	Tools   []string `toml:"tools"`   // packages to install
 	Run     []string `toml:"RUN"`     // custom RUN args (without the RUN prefix)
-	Startup string   `toml:"startup"` // user startup hook, not the container ENTRYPOINT
+	// CMD is the module's startup command, mirroring Dockerfile CMD syntax: a
+	// string is shell form, an array of strings is exec form. It is baked as the
+	// image CMD and run by the adapter (which stays the ENTRYPOINT). Optional.
+	CMD any `toml:"CMD"`
 }
 
 // VmdockerSection maps to [vmdocker]; consumed by runtime Export/Import (P4).
 type VmdockerSection struct {
-	Public []string `toml:"public"` // exportable path allowlist
+	// Public is the exportable path allowlist. Each entry MUST start with "~/"
+	// and is a HOME-relative glob: '*' matches any characters including '/'
+	// (recursive), '?' matches one character. Examples:
+	//   public = ["~/skills/*", "~/persona/*.md", "~/investment.md"]
+	Public []string `toml:"public"`
 }
 
 // ParseProfile parses profile.toml bytes and validates required fields.
@@ -38,6 +45,9 @@ func ParseProfile(data []byte) (Profile, error) {
 	}
 	if strings.TrimSpace(p.Dockerfile.From) == "" {
 		return Profile{}, fmt.Errorf("profile [dockerfile].FROM is required")
+	}
+	if _, err := renderCMD(p.Dockerfile.CMD); err != nil {
+		return Profile{}, err
 	}
 	return p, nil
 }

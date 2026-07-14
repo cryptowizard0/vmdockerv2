@@ -37,7 +37,7 @@ func readContainerMembers(t *testing.T, moduleBytes []byte) map[string][]byte {
 
 func TestPackModule_BuildFlow(t *testing.T) {
 	image := []byte("fake-image-archive")
-	profile := []byte("[dockerfile]\nFROM=\"openclaw\"\n")
+	profile := []byte("[dockerfile]\nFROM=\"docker/sandbox-templates:shell\"\n")
 	art, err := PackModule(PackInput{
 		ImageArchive:    image,
 		ImageName:       "vmdocker-openclaw:abc123",

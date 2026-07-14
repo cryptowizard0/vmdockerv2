@@ -5,11 +5,16 @@ import (
 )
 
 func spawn() {
-	runtimeBackend := GetEnvWith("RUNTIME_BACKEND", "")
-	res, err := s.Spawn(
+	tags := runtimeBackendTags(GetEnvWith("RUNTIME_BACKEND", ""))
+	tags = append(tags, runtimeTypeTags(GetEnvWith("RUNTIME_TYPE", ""))...)
+	res, err := s.SpawnAndWait(
 		module,
 		scheduler,
-		runtimeBackendTags(runtimeBackend),
+		tags,
 	)
-	fmt.Printf("res: %#v, err: %v\n", res, err)
+	if err != nil {
+		fmt.Printf("spawn failed: %v\n", err)
+		return
+	}
+	fmt.Printf("spawned pid: %s\n", res.Id)
 }

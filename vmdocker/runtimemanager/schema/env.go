@@ -13,4 +13,8 @@ var (
 	UseMount    = false
 	MountSource = os.ExpandEnv("$HOME/.ollama/models")
 	MountTarget = "/app/models"
+
+	// RuntimeUser is the non-root user the runtime container is forced to run
+	// as, matching the user the generated Dockerfile creates.
+	RuntimeUser = "hymx"
 )

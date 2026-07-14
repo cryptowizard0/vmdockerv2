@@ -14,11 +14,9 @@ func TestRuntimeSpecFromTags_DoesNotSetBackend(t *testing.T) {
 		{Name: vmdockerSchema.ImageIDTag, Value: "sha256:sandbox-template"},
 		{Name: vmdockerSchema.ImageSourceTag, Value: vmdockerSchema.ImageSourceModuleData},
 		{Name: vmdockerSchema.ImageArchiveTag, Value: vmdockerSchema.ImageArchiveDockerSaveGZ},
-		{Name: vmdockerSchema.StartCommandTag, Value: "/app/start-runtime.sh"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "", spec.Backend)
-	require.Equal(t, "/app/start-runtime.sh", spec.StartCommand)
 	require.Equal(t, "shell", spec.Sandbox.Agent)
 	require.Equal(t, "", spec.Sandbox.Workspace)
 	require.Equal(t, "", spec.Sandbox.Network)
@@ -109,24 +107,6 @@ func TestRuntimeSpecFromModuleAndSpawnTags_SpawnOverridesBackend(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, vmdockerSchema.RuntimeBackendDocker, spec.Backend)
 	require.Equal(t, "chriswebber/docker-openclaw-sandbox:v0.0.1", spec.Image.Name)
-}
-
-func TestRuntimeSpecFromModuleAndSpawnTags_SpawnOverridesStartCommand(t *testing.T) {
-	spec, err := RuntimeSpecFromModuleAndSpawnTags(
-		vmdockerSchema.ModuleFormat,
-		[]goarSchema.Tag{
-			{Name: vmdockerSchema.ImageNameTag, Value: "chriswebber/docker-openclaw-sandbox:v0.0.1"},
-			{Name: vmdockerSchema.ImageIDTag, Value: "sha256:sandbox-template"},
-			{Name: vmdockerSchema.ImageSourceTag, Value: vmdockerSchema.ImageSourceModuleData},
-			{Name: vmdockerSchema.ImageArchiveTag, Value: vmdockerSchema.ImageArchiveDockerSaveGZ},
-			{Name: vmdockerSchema.StartCommandTag, Value: "/module/start.sh"},
-		},
-		[]goarSchema.Tag{
-			{Name: vmdockerSchema.StartCommandTag, Value: "/spawn/start.sh --flag"},
-		},
-	)
-	require.NoError(t, err)
-	require.Equal(t, "/spawn/start.sh --flag", spec.StartCommand)
 }
 
 func TestRuntimeSpecFromModuleAndSpawnTags_NoSpawnBackendLeavesBackendEmpty(t *testing.T) {

@@ -14,16 +14,13 @@ func TestStageBuildContext(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "bin", "mybin"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A stray startup.sh in the profile dir must NOT be staged anymore.
 	if err := os.WriteFile(filepath.Join(src, "startup.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	profileTOML := []byte("[dockerfile]\nFROM=\"openclaw\"\nbin=\"bin\"\nstartup=\"startup.sh\"\n")
+	profileTOML := []byte("[dockerfile]\nFROM=\"docker/sandbox-templates:shell\"\nbin=\"bin\"\nCMD=[\"mybin\"]\n")
 	agentBin := filepath.Join(src, "platform-agent")
-	wrapper := filepath.Join(src, "platform-wrapper.sh")
 	if err := os.WriteFile(agentBin, []byte("BIN"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -31,16 +28,21 @@ func TestStageBuildContext(t *testing.T) {
 		ProfileTOML:  profileTOML,
 		ProfileDir:   src,
 		AgentBinPath: agentBin,
-		WrapperPath:  wrapper,
 	})
 	if err != nil {
 		t.Fatalf("stageBuildContext: %v", err)
 	}
 	defer os.RemoveAll(ctxDir)
 
-	for _, rel := range []string{"Dockerfile", "profile.toml", "bin/mybin", "startup.sh", "platform/vmdocker-agent", "platform/start-vmdocker-agent.sh"} {
+	for _, rel := range []string{"Dockerfile", "profile.toml", "bin/mybin", "platform/vmdocker-agent"} {
 		if _, err := os.Stat(filepath.Join(ctxDir, rel)); err != nil {
 			t.Errorf("staged context missing %s: %v", rel, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(ctxDir, "platform", "start-vmdocker-agent.sh")); err == nil {
+		t.Error("wrapper must no longer be staged")
+	}
+	if _, err := os.Stat(filepath.Join(ctxDir, "startup.sh")); err == nil {
+		t.Error("startup.sh must no longer be staged into the build context")
 	}
 }

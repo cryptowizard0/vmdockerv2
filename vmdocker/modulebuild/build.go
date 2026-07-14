@@ -13,9 +13,8 @@ import (
 // BuildOptions is the input to BuildModuleArtifact.
 type BuildOptions struct {
 	ProfileTOML  []byte // raw profile.toml bytes, also copied into the image
-	ProfileDir   string // dir containing the user's bin/ dir and startup script
+	ProfileDir   string // dir containing the user's bin/ dir
 	AgentBinPath string // host path to the platform adapter binary
-	WrapperPath  string // host path to the platform ENTRYPOINT wrapper
 	BuildTag     string // optional docker tag; defaults to a content hash
 	PublicZip    []byte // optional public.zip member for runtime Export
 }
@@ -73,7 +72,6 @@ func stageBuildContext(opts BuildOptions) (string, error) {
 	dockerfile, err := GenerateDockerfile(DockerfileInput{
 		Profile:     profile,
 		AgentBinSrc: "platform/vmdocker-agent",
-		WrapperSrc:  "platform/start-vmdocker-agent.sh",
 	})
 	if err != nil {
 		return "", err
@@ -97,10 +95,6 @@ func stageBuildContext(opts BuildOptions) (string, error) {
 		cleanup()
 		return "", fmt.Errorf("stage bin: %w", err)
 	}
-	if err := copyFile(filepath.Join(opts.ProfileDir, profile.Dockerfile.Startup), filepath.Join(ctxDir, profile.Dockerfile.Startup)); err != nil {
-		cleanup()
-		return "", fmt.Errorf("stage startup: %w", err)
-	}
 	platformDir := filepath.Join(ctxDir, "platform")
 	if err := os.MkdirAll(platformDir, 0o755); err != nil {
 		cleanup()
@@ -109,10 +103,6 @@ func stageBuildContext(opts BuildOptions) (string, error) {
 	if err := copyFile(opts.AgentBinPath, filepath.Join(platformDir, "vmdocker-agent")); err != nil {
 		cleanup()
 		return "", fmt.Errorf("stage agent binary: %w", err)
-	}
-	if err := copyFile(opts.WrapperPath, filepath.Join(platformDir, "start-vmdocker-agent.sh")); err != nil {
-		cleanup()
-		return "", fmt.Errorf("stage wrapper: %w", err)
 	}
 	return ctxDir, nil
 }

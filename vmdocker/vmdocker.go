@@ -22,7 +22,6 @@ import (
 	"github.com/hymatrix/hymx/common"
 	vmmSchema "github.com/hymatrix/hymx/vmm/schema"
 	goarSchema "github.com/permadao/goar/schema"
-	arutils "github.com/permadao/goar/utils"
 )
 
 var log = common.NewLog("vmdocker")
@@ -69,8 +68,7 @@ func handleRestoreFailure(rollbackWorkspace func() error, restorePreviousRuntime
 
 func cloneRuntimeSpec(spec runtimeSchema.RuntimeSpec) runtimeSchema.RuntimeSpec {
 	return runtimeSchema.RuntimeSpec{
-		Backend:      spec.Backend,
-		StartCommand: spec.StartCommand,
+		Backend: spec.Backend,
 		Image: runtimeSchema.ImageInfo{
 			Name:          spec.Image.Name,
 			SHA:           spec.Image.SHA,
@@ -82,7 +80,6 @@ func cloneRuntimeSpec(spec runtimeSchema.RuntimeSpec) runtimeSchema.RuntimeSpec 
 			Workspace: spec.Sandbox.Workspace,
 			Network:   spec.Sandbox.Network,
 			Name:      spec.Sandbox.Name,
-			Command:   spec.Sandbox.Command,
 		},
 	}
 }
@@ -108,11 +105,9 @@ func normalizeRuntimeSpecWorkspaceRoot(spec runtimeSchema.RuntimeSpec, targetWor
 
 func hasRuntimeSpec(spec runtimeSchema.RuntimeSpec) bool {
 	return strings.TrimSpace(spec.Backend) != "" ||
-		strings.TrimSpace(spec.StartCommand) != "" ||
 		strings.TrimSpace(spec.Image.Name) != "" ||
 		strings.TrimSpace(spec.Image.SHA) != "" ||
 		strings.TrimSpace(spec.Sandbox.Agent) != "" ||
-		strings.TrimSpace(spec.Sandbox.Command) != "" ||
 		strings.TrimSpace(spec.Sandbox.Network) != "" ||
 		strings.TrimSpace(spec.Sandbox.Name) != ""
 }
@@ -194,8 +189,21 @@ func (v *VmDocker) Run(cuAddr string, data []byte, tags []goarSchema.Tag) error 
 		return err
 	}
 	v.instanceInfo = instanceInfo
-	if err := seedWorkspaceProfileFromModule(v.Env.Process.Module, instanceInfo.Workspace, runtimeSpec.Image.ArchiveFormat); err != nil {
-		log.Error("seed workspace profile failed", "pid", v.pid, "module", v.Env.Process.Module, "workspace", instanceInfo.Workspace, "err", err)
+
+	// The instance now holds a container + allocated port. Any failure below
+	// (seed, start, readiness, spawn) must tear it down, otherwise the container
+	// and port leak — Spawn discards this VmDocker on error and never calls
+	// RemoveInstance. Mirrors the restore path's rollback guard.
+	spawnFailed := true
+	defer func() {
+		if spawnFailed && v.instanceInfo != nil {
+			_ = runtimeManager.RemoveInstance(ctx, v.pid)
+			v.instanceInfo = nil
+		}
+	}()
+
+	if err := seedWorkspaceFromModule(v.Env.Process.Module, instanceInfo.Workspace, runtimeSpec.Image.ArchiveFormat); err != nil {
+		log.Error("seed workspace from module failed", "pid", v.pid, "module", v.Env.Process.Module, "workspace", instanceInfo.Workspace, "err", err)
 		return err
 	}
 	log.Info("runtime instance created", "pid", v.pid, "port", instanceInfo.Port, "runtime_id", instanceInfo.ID, "backend", instanceInfo.Backend)
@@ -233,6 +241,7 @@ func (v *VmDocker) Run(cuAddr string, data []byte, tags []goarSchema.Tag) error 
 		return err
 	}
 	log.Info("runtime spawn request completed", "pid", v.pid, "runtime_id", instanceInfo.ID)
+	spawnFailed = false
 	return nil
 }
 
@@ -677,8 +686,6 @@ func (v *VmDocker) applyCapabilityAction(meta vmmSchema.Meta) (*vmmSchema.Result
 	switch strings.ToLower(strings.TrimSpace(meta.Action)) {
 	case "export":
 		return v.applyCapabilityExport(meta), true
-	case "import":
-		return v.applyCapabilityImport(meta), true
 	default:
 		return nil, false
 	}
@@ -701,33 +708,36 @@ func (v *VmDocker) applyCapabilityExport(meta vmmSchema.Meta) *vmmSchema.Result 
 		}
 		return &vmmSchema.Result{Output: col}
 	}
-	exported, err := capability.Export(context.Background(), home, capability.ExportOptions{
-		AgentBinPath: os.Getenv("VMDOCKER_AGENT_BIN"),
-		WrapperPath:  os.Getenv("VMDOCKER_WRAPPER"),
-		BuildTag:     paramValue(meta.Params, "build_tag", "Build-Tag"),
+	// Option A: reuse the running agent's existing image (the one it was spawned
+	// from) instead of rebuilding — the build inputs (bin/, CMD) are baked in
+	// the image, not the runtime workspace. RuntimeSpec.Image.SHA carries the
+	// original Image-ID; both tags must be non-empty for the exported module to
+	// spawn again.
+	image := v.instanceInfo.RuntimeSpec.Image
+	imageArchive, err := readModuleImageArchive(v.Env.Process.Module, image.ArchiveFormat)
+	if err != nil {
+		return &vmmSchema.Result{Error: err}
+	}
+	exported, err := capability.Export(home, capability.ExportOptions{
+		ImageArchive: imageArchive,
+		ImageName:    image.Name,
+		ImageID:      image.SHA,
 		SignerKey:    os.Getenv("VMDOCKER_MODULE_SIGNER_KEY"),
 	})
 	if err != nil {
 		return &vmmSchema.Result{Error: err}
 	}
+	// The exported module embeds the full container image (hundreds of MB).
+	// Persist it to the node's module store and return only its id — routing the
+	// bytes through the result/redis channel exceeds proto-max-bulk-len.
+	moduleID, err := persistModuleToStore(exported.ModuleBytes)
+	if err != nil {
+		return &vmmSchema.Result{Error: err}
+	}
 	return &vmmSchema.Result{
 		Output: exported.Collection,
-		Data:   arutils.Base64Encode(exported.ModuleBytes),
+		Data:   moduleID,
 	}
-}
-
-func (v *VmDocker) applyCapabilityImport(meta vmmSchema.Meta) *vmmSchema.Result {
-	moduleBytes, err := arutils.Base64Decode(meta.Data)
-	if err != nil {
-		return &vmmSchema.Result{Error: err}
-	}
-	result, err := capability.Import(v.instanceInfo.Workspace, moduleBytes, capability.ImportOptions{
-		OnConflict: paramValue(meta.Params, "on_conflict", "On-Conflict"),
-	})
-	if err != nil {
-		return &vmmSchema.Result{Error: err}
-	}
-	return &vmmSchema.Result{Output: result}
 }
 
 func truthyParam(params map[string]string, keys ...string) bool {

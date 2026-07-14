@@ -95,15 +95,15 @@ func TestSandboxManagerCreateAndStartInstanceUsesTemplateWorkflow(t *testing.T) 
 	if !strings.Contains(log, "-e XDG_STATE_HOME="+filepath.Join(containerHome, ".xdg", "state")) {
 		t.Fatalf("expected sandbox exec to inject XDG_STATE_HOME, got:\n%s", log)
 	}
-	if !strings.Contains(log, defaultRuntimeStartCommand) {
-		t.Fatalf("expected default runtime start command in log, got:\n%s", log)
+	if !strings.Contains(log, "/usr/local/bin/vmdocker-agent") {
+		t.Fatalf("expected the adapter entrypoint in the launch command, got:\n%s", log)
 	}
-	defaultCommand, err := buildBackgroundRuntimeCommand("")
+	launchCommand, err := buildSandboxLaunchCommand([]string{"/usr/local/bin/vmdocker-agent"}, []string{"node", "init.js"})
 	if err != nil {
-		t.Fatalf("buildBackgroundRuntimeCommand failed: %v", err)
+		t.Fatalf("buildSandboxLaunchCommand failed: %v", err)
 	}
-	if !strings.Contains(log, defaultCommand) {
-		t.Fatalf("expected sandbox start command to precreate TMPDIR, got:\n%s", log)
+	if !strings.Contains(log, launchCommand) {
+		t.Fatalf("expected image-derived sandbox launch command (precreating TMPDIR), got:\n%s", log)
 	}
 	if !strings.Contains(log, buildSandboxFilesystemLockdownCommand()) {
 		t.Fatalf("expected sandbox filesystem lockdown command in log, got:\n%s", log)
@@ -118,7 +118,7 @@ func TestSandboxManagerCreateInstancePullsAndVerifiesMissingTemplate(t *testing.
 	logPath := filepath.Join(tempDir, "docker.log")
 	statePath := filepath.Join(tempDir, "inspect-state")
 	fakeDocker := filepath.Join(tempDir, "docker")
-	script := "#!/bin/sh\nprintf '%s\n' \"$*\" >>" + shellEscapeForTest(logPath) + "\nif [ \"$1\" = \"--help\" ]; then\n  echo sandbox\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  if [ ! -f " + shellEscapeForTest(statePath) + " ]; then\n    echo 'Error: No such image' >&2\n    exit 1\n  fi\n  echo '[{\"Id\":\"sha256:template-id\",\"RepoDigests\":[\"chriswebber/docker-openclaw-sandbox@test-sha256:expected\"]}]'\n  exit 0\nfi\nif [ \"$1\" = \"pull\" ]; then\n  : > " + shellEscapeForTest(statePath) + "\n  exit 0\nfi\nexit 0\n"
+	script := "#!/bin/sh\nprintf '%s\n' \"$*\" >>" + shellEscapeForTest(logPath) + "\nif [ \"$1\" = \"--help\" ]; then\n  echo sandbox\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  if [ ! -f " + shellEscapeForTest(statePath) + " ]; then\n    echo 'Error: No such image' >&2\n    exit 1\n  fi\n  echo '[{\"Id\":\"sha256:template-id\",\"RepoDigests\":[\"chriswebber/docker-openclaw-sandbox@test-sha256:expected\"],\"Config\":{\"Entrypoint\":[\"/usr/local/bin/vmdocker-agent\"],\"Cmd\":[\"node\",\"init.js\"]}}]'\n  exit 0\nfi\nif [ \"$1\" = \"pull\" ]; then\n  : > " + shellEscapeForTest(statePath) + "\n  exit 0\nfi\nexit 0\n"
 	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake docker failed: %v", err)
 	}
@@ -425,23 +425,37 @@ func TestSandboxManagerRemoveInstancePreservesWorkspace(t *testing.T) {
 	}
 }
 
-func TestBuildBackgroundRuntimeCommandUsesConfiguredRuntimeCommand(t *testing.T) {
-	command, err := buildBackgroundRuntimeCommand("/app/custom-entrypoint --serve")
+func TestBuildSandboxLaunchCommand(t *testing.T) {
+	// exec form: image ENTRYPOINT (adapter) + CMD (author command).
+	command, err := buildSandboxLaunchCommand([]string{"/usr/local/bin/vmdocker-agent"}, []string{"node", "init.js"})
 	if err != nil {
-		t.Fatalf("buildBackgroundRuntimeCommand failed: %v", err)
+		t.Fatalf("build: %v", err)
 	}
-	expected := "mkdir -p \"${TMPDIR:-/tmp}\" && '/app/custom-entrypoint' '--serve' >\"${TMPDIR:-/tmp}/vmdocker-agent.log\" 2>&1 &"
+	expected := "mkdir -p \"${TMPDIR:-/tmp}\" && '/usr/local/bin/vmdocker-agent' 'node' 'init.js' >\"${TMPDIR:-/tmp}/vmdocker-agent.log\" 2>&1 &"
 	if command != expected {
-		t.Fatalf("buildBackgroundRuntimeCommand() = %q, want %q", command, expected)
+		t.Fatalf("command = %q, want %q", command, expected)
+	}
+
+	// no CMD: just the adapter entrypoint, still backgrounded.
+	command, err = buildSandboxLaunchCommand([]string{"/usr/local/bin/vmdocker-agent"}, nil)
+	if err != nil {
+		t.Fatalf("build no-cmd: %v", err)
+	}
+	if !strings.Contains(command, "'/usr/local/bin/vmdocker-agent'") || strings.Contains(command, "init.js") {
+		t.Fatalf("no-cmd command = %q", command)
+	}
+
+	// nothing to launch -> error.
+	if _, err := buildSandboxLaunchCommand(nil, nil); err == nil {
+		t.Fatal("expected error when the image has no ENTRYPOINT or CMD")
 	}
 }
 
-func TestSandboxManagerStartInstancePrefersStartCommandOverSandboxCommand(t *testing.T) {
+func TestSandboxManagerStartInstanceLaunchesImageEntrypointAndCmd(t *testing.T) {
 	sm, logPath, tempDir := newTestSandboxManager(t)
 
 	spec := schema.RuntimeSpec{
-		Backend:      schema.RuntimeBackendSandbox,
-		StartCommand: "/app/start-runtime.sh --foreground",
+		Backend: schema.RuntimeBackendSandbox,
 		Image: schema.ImageInfo{
 			Name: "chriswebber/docker-openclaw-sandbox:test",
 			SHA:  "sha256:expected",
@@ -450,7 +464,6 @@ func TestSandboxManagerStartInstancePrefersStartCommandOverSandboxCommand(t *tes
 			Agent:     "shell",
 			Workspace: filepath.Join(tempDir, "workspace"),
 			Name:      "runtime-pid-6",
-			Command:   "legacy-sandbox-command",
 		},
 	}
 
@@ -466,15 +479,14 @@ func TestSandboxManagerStartInstancePrefersStartCommandOverSandboxCommand(t *tes
 		t.Fatalf("read fake docker log failed: %v", err)
 	}
 	log := string(raw)
-	expectedCommand, err := buildBackgroundRuntimeCommand("/app/start-runtime.sh --foreground")
+	// The fake docker inspect returns ENTRYPOINT=[adapter] + CMD=[node init.js];
+	// the sandbox must launch exactly that.
+	expectedCommand, err := buildSandboxLaunchCommand([]string{"/usr/local/bin/vmdocker-agent"}, []string{"node", "init.js"})
 	if err != nil {
-		t.Fatalf("buildBackgroundRuntimeCommand failed: %v", err)
+		t.Fatalf("buildSandboxLaunchCommand failed: %v", err)
 	}
 	if !strings.Contains(log, expectedCommand) {
-		t.Fatalf("expected Start-Command based sandbox command in log, got:\n%s", log)
-	}
-	if strings.Contains(log, "legacy-sandbox-command") {
-		t.Fatalf("did not expect Sandbox-Command to override Start-Command, got:\n%s", log)
+		t.Fatalf("expected image-derived sandbox command in log, got:\n%s", log)
 	}
 }
 
@@ -502,7 +514,7 @@ func newTestSandboxManager(t *testing.T) (*SandboxManager, string, string) {
 	tempDir := t.TempDir()
 	logPath := filepath.Join(tempDir, "docker.log")
 	fakeDocker := filepath.Join(tempDir, "docker")
-	script := "#!/bin/sh\nprintf '%s\n' \"$*\" >>" + shellEscapeForTest(logPath) + "\nif [ \"$1\" = \"--help\" ]; then\n  echo sandbox\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo '[{\"Id\":\"sha256:template-id\",\"RepoDigests\":[\"chriswebber/docker-openclaw-sandbox@test-sha256:expected\"]}]'\n  exit 0\nfi\nexit 0\n"
+	script := "#!/bin/sh\nprintf '%s\n' \"$*\" >>" + shellEscapeForTest(logPath) + "\nif [ \"$1\" = \"--help\" ]; then\n  echo sandbox\n  exit 0\nfi\nif [ \"$1\" = \"image\" ] && [ \"$2\" = \"inspect\" ]; then\n  echo '[{\"Id\":\"sha256:template-id\",\"RepoDigests\":[\"chriswebber/docker-openclaw-sandbox@test-sha256:expected\"],\"Config\":{\"Entrypoint\":[\"/usr/local/bin/vmdocker-agent\"],\"Cmd\":[\"node\",\"init.js\"]}}]'\n  exit 0\nfi\nexit 0\n"
 	if err := os.WriteFile(fakeDocker, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake docker failed: %v", err)
 	}

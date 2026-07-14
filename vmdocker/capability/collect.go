@@ -42,43 +42,84 @@ func resolveWithinHome(home, abs string) (string, error) {
 	return real, nil
 }
 
-// CollectPublic collects each public entry under home: a directory when the
-// entry ends with "/", else a single file. Type mismatches warn and skip.
+// CollectPublic collects the files selected by the profile's `public` entries.
+// Each entry is a "~/"-prefixed HOME-relative glob (see publicPattern); an entry
+// with no glob metacharacter selects one exact file, while a glob (e.g.
+// "~/skills/*") selects every matching file, recursively. Malformed entries and
+// entries that match nothing produce warnings and are skipped.
 func CollectPublic(home string, public []string) (Collection, error) {
 	col := Collection{Public: append([]string(nil), public...)}
-	for _, entry := range public {
-		wantDir := strings.HasSuffix(entry, "/")
-		root := filepath.Join(home, strings.TrimRight(entry, "/"))
-		info, err := os.Stat(root)
-		if err != nil {
-			col.Warnings = append(col.Warnings, fmt.Sprintf("public entry %q missing", entry))
-			continue
-		}
-		if info.IsDir() != wantDir {
-			col.Warnings = append(col.Warnings, fmt.Sprintf("public entry %q does not match its trailing-slash marker", entry))
-			continue
-		}
-		if !wantDir {
-			if err := collectOne(home, root, &col); err != nil {
-				return Collection{}, err
-			}
-			continue
-		}
-		err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil {
-				return err
-			}
-			if info.IsDir() {
-				return nil
-			}
-			return collectOne(home, path, &col)
-		})
+	pats, warnings := compilePublicPatterns(public)
+	col.Warnings = append(col.Warnings, warnings...)
+
+	seen := make(map[string]bool)
+	for _, p := range pats {
+		matched, err := collectPattern(home, p, seen, &col)
 		if err != nil {
 			return Collection{}, err
+		}
+		if !matched {
+			col.Warnings = append(col.Warnings, fmt.Sprintf("public entry %q matched no files", p.Raw))
 		}
 	}
 	sort.Slice(col.Entries, func(i, j int) bool { return col.Entries[i].Path < col.Entries[j].Path })
 	return col, nil
+}
+
+// collectPattern collects the files matched by one pattern, deduping against
+// seen (a file may be selected by multiple patterns). It reports whether the
+// pattern matched at least one file.
+func collectPattern(home string, p publicPattern, seen map[string]bool, col *Collection) (bool, error) {
+	// Exact file (no glob): stat directly; a directory here is a usage error.
+	if !p.IsGlob {
+		abs := filepath.Join(home, p.Rel)
+		info, err := os.Stat(abs)
+		if err != nil {
+			return false, nil
+		}
+		if info.IsDir() {
+			col.Warnings = append(col.Warnings, fmt.Sprintf("public entry %q is a directory; use %q to include its contents", p.Raw, "~/"+p.Rel+"/*"))
+			return false, nil
+		}
+		if seen[p.Rel] {
+			return true, nil
+		}
+		seen[p.Rel] = true
+		return true, collectOne(home, abs, col)
+	}
+
+	// Glob: walk from the literal base directory and match each file.
+	root := filepath.Join(home, literalBaseDir(p.Rel))
+	matched := false
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return filepath.SkipDir
+			}
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(home, path)
+		if err != nil {
+			return err
+		}
+		relSlash := filepath.ToSlash(rel)
+		if !p.re.MatchString(relSlash) {
+			return nil
+		}
+		matched = true
+		if seen[relSlash] {
+			return nil
+		}
+		seen[relSlash] = true
+		return collectOne(home, path, col)
+	})
+	if err != nil {
+		return matched, err
+	}
+	return matched, nil
 }
 
 func collectOne(home, path string, col *Collection) error {

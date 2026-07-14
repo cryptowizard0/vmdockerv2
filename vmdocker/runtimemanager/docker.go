@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -27,6 +28,9 @@ type DockerManager struct {
 	instances     map[string]*schema.InstanceInfo
 	mutex         sync.RWMutex
 	portAllocator *portAllocator
+	nodeCheckMu   sync.Mutex
+	nodeChecked   bool
+	nodeCheckErr  error
 }
 
 func newDockerManager() (*DockerManager, error) {
@@ -110,7 +114,42 @@ func (dm *DockerManager) verifyImageSHA(ctx context.Context, imageInfo schema.Im
 		imageInfo.Name, imageInfo.SHA, inspect.RepoDigests, inspect.ID)
 }
 
+func (dm *DockerManager) ensureNodeConfinement() error {
+	return dm.checkNodeConfinement(dm.cli)
+}
+
+// checkNodeConfinement runs the node confinement check at most once per
+// successful verdict. A transient daemon-unreachable failure (nil report) is
+// NOT cached, so a momentary Docker hiccup on the first spawn does not
+// permanently latch every later spawn to failure; the check is retried on the
+// next call until a real verdict (pass or misconfiguration) is reached.
+func (dm *DockerManager) checkNodeConfinement(cli infoClient) error {
+	dm.nodeCheckMu.Lock()
+	defer dm.nodeCheckMu.Unlock()
+
+	if !dm.nodeChecked {
+		strict := os.Getenv("VMDOCKER_NODE_CHECK_STRICT") == "1"
+		checkCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		report, err := RunNodeConfinementCheck(checkCtx, cli, strict)
+		if err != nil && report == nil {
+			// Daemon unreachable: transient. Do not latch; retry next spawn.
+			return fmt.Errorf("node confinement check failed: %w", err)
+		}
+		dm.nodeChecked = true
+		dm.nodeCheckErr = err
+	}
+	if dm.nodeCheckErr != nil {
+		return fmt.Errorf("node confinement check failed: %w", dm.nodeCheckErr)
+	}
+	return nil
+}
+
 func (dm *DockerManager) CreateInstance(ctx context.Context, pid string, runtimeSpec schema.RuntimeSpec, runtimeEnv []string) (*schema.InstanceInfo, error) {
+	if err := dm.ensureNodeConfinement(); err != nil {
+		return nil, err
+	}
+
 	dm.mutex.Lock()
 	defer dm.mutex.Unlock()
 
@@ -130,25 +169,21 @@ func (dm *DockerManager) CreateInstance(ctx context.Context, pid string, runtime
 		return nil, err
 	}
 
+	tmpDir, err := ensureRuntimeTmpDir(workspace)
+	if err != nil {
+		dm.portAllocator.Release(port)
+		return nil, err
+	}
+
 	launchRuntimeEnv := append([]string(nil), runtimeEnv...)
 	launchRuntimeSpec := runtimeSpec
 	launchRuntimeSpec.Sandbox.Workspace = runtimeWorkspaceRootFromPath(workspace)
 
 	runtimeEnv = appendRuntimePersistenceEnv(runtimeEnv, workspace)
 
-	hostConfig := buildDockerHostConfig(port, workspace)
+	hostConfig := buildDockerHostConfig(port, workspace, tmpDir)
 
-	startCommand, err := buildForegroundRuntimeCommand(runtimeSpec.StartCommand)
-	if err != nil {
-		dm.portAllocator.Release(port)
-		return nil, fmt.Errorf("build docker start command failed: %w", err)
-	}
-
-	config, err := buildDockerContainerConfig(runtimeSpec, runtimeEnv, startCommand, workspace)
-	if err != nil {
-		dm.portAllocator.Release(port)
-		return nil, err
-	}
+	config := buildDockerContainerConfig(runtimeSpec, runtimeEnv)
 
 	resp, err := dm.cli.ContainerCreate(ctx, config, hostConfig, nil, nil, ContainerNamePrefix+pid)
 	if err != nil {
@@ -231,24 +266,23 @@ func (dm *DockerManager) StopInstance(ctx context.Context, pid string) error {
 	return nil
 }
 
-func buildDockerContainerConfig(runtimeSpec schema.RuntimeSpec, runtimeEnv, startCommand []string, workspace string) (*container.Config, error) {
-	if len(startCommand) == 0 {
-		return nil, fmt.Errorf("docker start command is empty")
-	}
-
+// buildDockerContainerConfig builds the container config for a docker-backed
+// spawn. It deliberately leaves Entrypoint and Cmd unset so the container runs
+// the image's baked ENTRYPOINT (the vmdocker-agent adapter) and CMD (the author
+// command from [dockerfile].CMD) — the spawn must not override either.
+func buildDockerContainerConfig(runtimeSpec schema.RuntimeSpec, runtimeEnv []string) *container.Config {
 	return &container.Config{
-		Image:      runtimeSpec.Image.Name,
-		Entrypoint: []string{startCommand[0]},
+		Image: runtimeSpec.Image.Name,
+		User:  schema.RuntimeUser,
 		ExposedPorts: nat.PortSet{
 			nat.Port(schema.ExprotPort): struct{}{},
 		},
-		Cmd:        startCommand[1:],
 		Env:        runtimeEnv,
 		WorkingDir: containerHome,
-	}, nil
+	}
 }
 
-func buildDockerHostConfig(port int, workspace string) *container.HostConfig {
+func buildDockerHostConfig(port int, workspace, tmpDir string) *container.HostConfig {
 	pidsLimit := int64(256)
 	hostConfig := &container.HostConfig{
 		PortBindings: nat.PortMap{
@@ -284,7 +318,7 @@ func buildDockerHostConfig(port int, workspace string) *container.HostConfig {
 		},
 		Resources: container.Resources{
 			Memory:     int64(schema.MaxMem),
-			MemorySwap: -1,
+			MemorySwap: int64(schema.MaxMem), // == Memory: no swap dilution
 			PidsLimit:  &pidsLimit,
 			CPUPeriod:  100000,
 			CPUQuota:   200000,
@@ -307,6 +341,17 @@ func buildDockerHostConfig(port int, workspace string) *container.HostConfig {
 		Source: workspace,
 		Target: containerHome,
 	})
+	// The rootfs is read-only, so the container has no writable /tmp. Bind a
+	// host dir (a sibling of the pid workspace, under sandbox_workspace) so the
+	// adapter's startup-hook log and any tooling that assumes a writable /tmp
+	// work, and the contents are inspectable/persisted on the host.
+	if tmpDir != "" {
+		hostConfig.Mounts = append(hostConfig.Mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: tmpDir,
+			Target: containerTmp,
+		})
+	}
 	return hostConfig
 }
 

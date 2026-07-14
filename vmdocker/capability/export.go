@@ -1,12 +1,12 @@
 package capability
 
 import (
-	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/cryptowizard0/vmdockerv2/vmdocker/modulebuild"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -17,12 +17,18 @@ import (
 	arSchema "github.com/permadao/goar/schema"
 )
 
-// ExportOptions configures image rebuild and module signing for Export.
+// ExportOptions configures module packing and signing for Export.
+//
+// Export reuses the agent's existing image (the one it was spawned from) rather
+// than rebuilding from profile.toml: the image-build inputs (bin/, CMD)
+// live baked in the image at /usr/local/*, not in the runtime workspace, so a
+// rebuild from the live workspace is impossible. The caller reads image.tar.gz
+// out of the running process's module and passes it here.
 type ExportOptions struct {
-	AgentBinPath string
-	WrapperPath  string
-	BuildTag     string
-	SignerKey    string
+	ImageArchive []byte // the running agent's image.tar.gz, reused as-is
+	ImageName    string // Image-Name tag carried onto the new module
+	ImageID      string // Image-ID tag carried onto the new module
+	SignerKey    string // hex signer key; empty -> ephemeral key
 }
 
 // ExportResult contains the signed module JSON and the collected public preview.
@@ -31,9 +37,11 @@ type ExportResult struct {
 	Collection  Collection
 }
 
-// Export collects public.zip, rebuilds the image from profile.toml, and returns
-// a signed V2 module JSON containing image.tar.gz + profile.toml + public.zip.
-func Export(ctx context.Context, home string, opts ExportOptions) (ExportResult, error) {
+// Export freshly collects public.zip from the live workspace, packs it together
+// with the reused image.tar.gz and the current profile.toml, and returns a
+// signed V2 module JSON. The program (image, incl. bin/ and the CMD) is carried
+// over unchanged; only the public state is re-captured at export time.
+func Export(home string, opts ExportOptions) (ExportResult, error) {
 	profilePath := filepath.Join(home, "profile.toml")
 	profileTOML, err := os.ReadFile(profilePath)
 	if err != nil {
@@ -43,6 +51,19 @@ func Export(ctx context.Context, home string, opts ExportOptions) (ExportResult,
 	if err != nil {
 		return ExportResult{}, err
 	}
+	if len(opts.ImageArchive) == 0 {
+		return ExportResult{}, fmt.Errorf("export requires the running agent's image (ImageArchive); export does not rebuild from profile")
+	}
+	// Fail fast on malformed public entries. compilePublicPatterns warn-and-skips
+	// bad entries — a fail-closed property the import allowlist depends on — but
+	// for a mutating export that silently drops the author's declared files (e.g.
+	// entries still in the pre-"~/" legacy format), producing a "successful"
+	// module with an empty public.zip. Preview/dry_run stays lenient so authors
+	// can iterate; only the artifact-producing path is strict.
+	if _, rejected := compilePublicPatterns(profile.Vmdocker.Public); len(rejected) > 0 {
+		return ExportResult{}, fmt.Errorf("profile has %d invalid public entry(ies); fix them before export: %s",
+			len(rejected), strings.Join(rejected, "; "))
+	}
 	col, err := CollectPublic(home, profile.Vmdocker.Public)
 	if err != nil {
 		return ExportResult{}, err
@@ -51,13 +72,14 @@ func Export(ctx context.Context, home string, opts ExportOptions) (ExportResult,
 	if err != nil {
 		return ExportResult{}, err
 	}
-	artifact, err := modulebuild.BuildModuleArtifact(ctx, modulebuild.BuildOptions{
-		ProfileTOML:  profileTOML,
-		ProfileDir:   home,
-		AgentBinPath: opts.AgentBinPath,
-		WrapperPath:  opts.WrapperPath,
-		BuildTag:     opts.BuildTag,
-		PublicZip:    publicZip,
+	artifact, err := modulebuild.PackModule(modulebuild.PackInput{
+		ImageArchive:    opts.ImageArchive,
+		ImageName:       opts.ImageName,
+		ImageID:         opts.ImageID,
+		ProfileTOML:     profileTOML,
+		PublicZip:       publicZip,
+		Public:          profile.Vmdocker.Public,
+		IncludeImageSHA: true,
 	})
 	if err != nil {
 		return ExportResult{}, err

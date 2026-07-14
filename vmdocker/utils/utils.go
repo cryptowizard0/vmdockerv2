@@ -64,15 +64,13 @@ func RuntimeSpecFromTags(moduleFormat string, tags []goarSchema.Tag) (schema.Run
 	}
 
 	spec := schema.RuntimeSpec{
-		Backend:      "",
-		StartCommand: startCommandFromTags(tags),
-		Image:        imageInfo,
+		Backend: "",
+		Image:   imageInfo,
 		Sandbox: schema.SandboxSpec{
 			Agent:     utils.GetTagsValueByDefault(schema.SandboxAgentTag, tags, "shell"),
 			Workspace: "",
 			Network:   utils.GetTagsValueByDefault(schema.SandboxNetworkTag, tags, ""),
 			Name:      utils.GetTagsValueByDefault(schema.SandboxNameTag, tags, ""),
-			Command:   utils.GetTagsValueByDefault(schema.SandboxCommandTag, tags, ""),
 		},
 	}
 
@@ -95,25 +93,12 @@ func RuntimeSpecFromModuleAndSpawnTags(moduleFormat string, moduleTags, spawnTag
 		}
 	}
 
-	if startCommand := startCommandFromTags(spawnTags); startCommand != "" {
-		spec.StartCommand = startCommand
-	}
-
 	return spec, nil
 }
 
 func runtimeBackendFromTags(tags []goarSchema.Tag) string {
 	for i := len(tags) - 1; i >= 0; i-- {
 		if tags[i].Name == schema.RuntimeBackendTag {
-			return tags[i].Value
-		}
-	}
-	return ""
-}
-
-func startCommandFromTags(tags []goarSchema.Tag) string {
-	for i := len(tags) - 1; i >= 0; i-- {
-		if tags[i].Name == schema.StartCommandTag {
 			return tags[i].Value
 		}
 	}

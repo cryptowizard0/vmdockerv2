@@ -2,6 +2,7 @@ package vmdocker
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cryptowizard0/vmdockerv2/vmdocker/capability"
 	runtimeSchema "github.com/cryptowizard0/vmdockerv2/vmdocker/runtimemanager/schema"
 	goarSchema "github.com/permadao/goar/schema"
 	goarUtils "github.com/permadao/goar/utils"
@@ -105,7 +107,7 @@ func TestSeedWorkspaceProfileFromContainerTarModule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read seeded profile: %v", err)
 	}
-	if !strings.Contains(string(got), `FROM="openclaw"`) {
+	if !strings.Contains(string(got), `FROM="docker/sandbox-templates:shell"`) {
 		t.Fatalf("seeded profile = %q", got)
 	}
 }
@@ -405,7 +407,7 @@ func writeContainerModulePayload(moduleID string, imageArchive []byte) error {
 	if err := writeMember("image.tar.gz", imageArchive); err != nil {
 		return err
 	}
-	if err := writeMember("profile.toml", []byte("[dockerfile]\nFROM=\"openclaw\"\n")); err != nil {
+	if err := writeMember("profile.toml", []byte("[dockerfile]\nFROM=\"docker/sandbox-templates:shell\"\n")); err != nil {
 		return err
 	}
 	if err := tw.Close(); err != nil {
@@ -497,4 +499,173 @@ func shellEscapeForModuleTest(value string) string {
 		return "''"
 	}
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func zipBytesForTest(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, body := range files {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func writeContainerModulePayloadWithPublic(moduleID string, imageArchive, publicZip []byte) error {
+	var container bytes.Buffer
+	tw := tar.NewWriter(&container)
+	writeMember := func(name string, payload []byte) error {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(payload))}); err != nil {
+			return err
+		}
+		_, err := tw.Write(payload)
+		return err
+	}
+	if err := writeMember("image.tar.gz", imageArchive); err != nil {
+		return err
+	}
+	if err := writeMember("profile.toml", []byte("[dockerfile]\nFROM=\"docker/sandbox-templates:shell\"\n")); err != nil {
+		return err
+	}
+	if err := writeMember("public.zip", publicZip); err != nil {
+		return err
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	return writeModulePayload(moduleID, container.Bytes(), false, false)
+}
+
+func chdirToTempModuleDir(t *testing.T) {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("chdir failed: %v", err)
+	}
+	if err := os.MkdirAll("mod", 0o755); err != nil {
+		t.Fatalf("mkdir mod failed: %v", err)
+	}
+}
+
+func TestSeedWorkspaceFromModule_ProfileAndPublic(t *testing.T) {
+	const moduleID = "module-clone"
+	chdirToTempModuleDir(t)
+	pub := zipBytesForTest(t, map[string]string{"skills/soul.md": "SOUL"})
+	if err := writeContainerModulePayloadWithPublic(moduleID, []byte("image"), pub); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	ws := t.TempDir()
+	if err := seedWorkspaceFromModule(moduleID, ws, runtimeSchema.ImageArchiveContainerTarGZ); err != nil {
+		t.Fatalf("seedWorkspaceFromModule: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(ws, "profile.toml")); !strings.Contains(string(b), `FROM="docker/sandbox-templates:shell"`) {
+		t.Fatalf("seeded profile = %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(ws, "skills", "soul.md")); string(b) != "SOUL" {
+		t.Fatalf("seeded public = %q", b)
+	}
+}
+
+func TestSeedWorkspaceFromModule_NoPublicIsNoop(t *testing.T) {
+	const moduleID = "module-nopublic"
+	chdirToTempModuleDir(t)
+	if err := writeContainerModulePayload(moduleID, []byte("image")); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+	ws := t.TempDir()
+	if err := seedWorkspaceFromModule(moduleID, ws, runtimeSchema.ImageArchiveContainerTarGZ); err != nil {
+		t.Fatalf("seedWorkspaceFromModule: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(ws, "profile.toml")); !strings.Contains(string(b), `FROM="docker/sandbox-templates:shell"`) {
+		t.Fatalf("seeded profile = %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(ws, "skills")); !os.IsNotExist(err) {
+		t.Fatalf("expected no public content, stat err = %v", err)
+	}
+}
+
+func TestSeedWorkspaceFromModule_PublicTooLargeRejected(t *testing.T) {
+	const moduleID = "module-public-huge"
+	chdirToTempModuleDir(t)
+
+	// Craft a container tar whose public.zip member *declares* a size past the
+	// unpack limit, with no body. seedWorkspaceFromModule must reject on the
+	// declared size — before buffering the member into host memory — rather than
+	// reading up to the 1 GiB image-member limit first.
+	var container bytes.Buffer
+	tw := tar.NewWriter(&container)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "public.zip", Mode: 0o644, Size: capability.DefaultMaxBytes + 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeModulePayload(moduleID, container.Bytes(), false, false); err != nil {
+		t.Fatalf("write payload: %v", err)
+	}
+
+	err := seedWorkspaceFromModule(moduleID, t.TempDir(), runtimeSchema.ImageArchiveContainerTarGZ)
+	if err == nil {
+		t.Fatal("oversized public.zip member must be rejected")
+	}
+	if !strings.Contains(err.Error(), "public.zip member") {
+		t.Fatalf("expected public.zip size rejection, got: %v", err)
+	}
+}
+
+func TestSeedWorkspaceFromModule_OldFormatIsNoop(t *testing.T) {
+	ws := t.TempDir()
+	if err := seedWorkspaceFromModule("unused", ws, runtimeSchema.ImageArchiveDockerSaveGZ); err != nil {
+		t.Fatalf("seedWorkspaceFromModule: %v", err)
+	}
+	entries, _ := os.ReadDir(ws)
+	if len(entries) != 0 {
+		t.Fatalf("expected empty workspace for old format, got %d entries", len(entries))
+	}
+}
+
+func TestPersistModuleToStore(t *testing.T) {
+	t.Chdir(t.TempDir())
+	raw, err := json.Marshal(goarSchema.BundleItem{Id: "TESTID123"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := persistModuleToStore(raw)
+	if err != nil {
+		t.Fatalf("persistModuleToStore: %v", err)
+	}
+	if id != "TESTID123" {
+		t.Fatalf("id = %q, want TESTID123", id)
+	}
+	got, err := os.ReadFile(filepath.Join("mod", "mod-TESTID123.json"))
+	if err != nil {
+		t.Fatalf("module not written to store: %v", err)
+	}
+	if !bytes.Equal(got, raw) {
+		t.Fatal("stored bytes differ from input")
+	}
+	// What we write must be exactly what the node loads back.
+	if _, err := resolveModuleFilePath("TESTID123"); err != nil {
+		t.Fatalf("resolveModuleFilePath after persist: %v", err)
+	}
+}
+
+func TestPersistModuleToStore_EmptyIdRejected(t *testing.T) {
+	t.Chdir(t.TempDir())
+	raw, _ := json.Marshal(goarSchema.BundleItem{})
+	if _, err := persistModuleToStore(raw); err == nil {
+		t.Fatal("expected error for empty module id")
+	}
 }

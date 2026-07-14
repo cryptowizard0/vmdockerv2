@@ -102,8 +102,7 @@ func TestResolveRestoreLaunchConfigPrefersCheckpointLaunchConfig(t *testing.T) {
 	checkpoint := workspaceCheckpoint{
 		Backend: "sandbox",
 		RuntimeSpec: runtimeSchema.RuntimeSpec{
-			Backend:      "sandbox",
-			StartCommand: "/app/claude-start.sh",
+			Backend: "sandbox",
 			Image: runtimeSchema.ImageInfo{
 				Name: "claude-image:test",
 				SHA:  "sha256:claude",

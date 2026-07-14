@@ -234,39 +234,16 @@ func TestGetRuntimeManagerLinuxRejectsSandbox(t *testing.T) {
 	assert.EqualError(t, err, "runtime backend sandbox is not supported on linux")
 }
 
-func TestBuildForegroundRuntimeCommandUsesConfiguredRuntimeCommand(t *testing.T) {
-	args, err := buildForegroundRuntimeCommand("/app/custom-entrypoint --serve")
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"/app/custom-entrypoint", "--serve"}, args)
-
-	args, err = buildForegroundRuntimeCommand(`/app/custom-entrypoint --label "hello world"`)
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"/app/custom-entrypoint", "--label", "hello world"}, args)
-
-	args, err = buildForegroundRuntimeCommand("")
-	assert.NoError(t, err)
-	assert.Equal(t, []string{defaultRuntimeStartCommand}, args)
-}
-
-func TestBuildForegroundRuntimeCommandRejectsInvalidQuotedCommand(t *testing.T) {
-	_, err := buildForegroundRuntimeCommand(`"/app/custom-entrypoint`)
-	assert.EqualError(t, err, "unterminated quoted string in start command")
-}
-
-func TestBuildDockerContainerConfigUsesImageUserAndParsedCommand(t *testing.T) {
-	startCommand, err := buildForegroundRuntimeCommand(`/app/start-runtime --label "hello world"`)
-	assert.NoError(t, err)
-
+func TestBuildDockerContainerConfigInheritsImageEntrypointAndCmd(t *testing.T) {
 	runtimeEnv := appendRuntimePersistenceEnv([]string{"OPENCLAW_GATEWAY_TOKEN=test-token"}, "/tmp/runtime-workspace/pid-1")
-	config, err := buildDockerContainerConfig(schema.RuntimeSpec{
+	config := buildDockerContainerConfig(schema.RuntimeSpec{
 		Image: schema.ImageInfo{Name: "example/runtime:test"},
-	}, runtimeEnv, startCommand, "/tmp/runtime-workspace/pid-1")
-	assert.NoError(t, err)
+	}, runtimeEnv)
 	if assert.NotNil(t, config) {
 		assert.Equal(t, "example/runtime:test", config.Image)
-		assert.Empty(t, config.User)
-		assert.Equal(t, []string{"/app/start-runtime"}, []string(config.Entrypoint))
-		assert.Equal(t, []string{"--label", "hello world"}, []string(config.Cmd))
+		assert.Equal(t, schema.RuntimeUser, config.User)
+		assert.Nil(t, config.Entrypoint, "entrypoint must be inherited from the image")
+		assert.Nil(t, config.Cmd, "cmd must be inherited from the image")
 		assert.Equal(t, containerHome, config.WorkingDir)
 		assert.Contains(t, config.Env, "OPENCLAW_GATEWAY_TOKEN=test-token")
 		assert.Contains(t, config.Env, "OPENCLAW_STATE_DIR=/home/hymx/.openclaw")
@@ -276,7 +253,7 @@ func TestBuildDockerContainerConfigUsesImageUserAndParsedCommand(t *testing.T) {
 }
 
 func TestBuildDockerHostConfigIncludesWorkspaceMount(t *testing.T) {
-	hostConfig := buildDockerHostConfig(18080, "/tmp/runtime-workspace/pid-1")
+	hostConfig := buildDockerHostConfig(18080, "/tmp/runtime-workspace/pid-1", "/tmp/runtime-workspace/pid-1-tmp")
 	if assert.NotNil(t, hostConfig) {
 		assert.True(t, hostConfig.ReadonlyRootfs)
 		bindings := hostConfig.PortBindings[nat.Port(schema.ExprotPort)]
@@ -288,6 +265,11 @@ func TestBuildDockerHostConfigIncludesWorkspaceMount(t *testing.T) {
 			Type:   mount.TypeBind,
 			Source: "/tmp/runtime-workspace/pid-1",
 			Target: containerHome,
+		})
+		assert.Contains(t, hostConfig.Mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: "/tmp/runtime-workspace/pid-1-tmp",
+			Target: containerTmp,
 		})
 	}
 }

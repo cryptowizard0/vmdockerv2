@@ -2,49 +2,25 @@ package modulebuild
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"text/template"
 )
 
-// BaseSpec is the resolved result of a FROM alias (spec §5.3).
-type BaseSpec struct {
-	Image       string // base docker image that already bundles the engine
-	RuntimeType string // value for the RUNTIME_TYPE env / adapter dispatch
-}
-
-// baseAliases maps profile [dockerfile].FROM aliases to a platform base image.
-// hermes is intentionally omitted until its base image is provided.
-var baseAliases = map[string]BaseSpec{
-	"openclaw": {Image: "docker/sandbox-templates:shell", RuntimeType: "openclaw"},
-	"claude":   {Image: "docker/sandbox-templates:claude-code", RuntimeType: "claude"},
-}
-
-// ResolveFROM resolves a FROM alias to its base image + runtime type.
-func ResolveFROM(alias string) (BaseSpec, error) {
-	spec, ok := baseAliases[strings.ToLower(strings.TrimSpace(alias))]
-	if !ok {
-		return BaseSpec{}, fmt.Errorf("unknown FROM alias %q (supported: openclaw, claude)", alias)
-	}
-	return spec, nil
-}
-
 // DockerfileInput carries everything needed to render the standardized
-// Dockerfile. AgentBinSrc/WrapperSrc are build-context paths to the platform
-// adapter binary and ENTRYPOINT wrapper.
+// Dockerfile. AgentBinSrc is the build-context path to the platform adapter
+// binary, which is launched directly as ENTRYPOINT.
 type DockerfileInput struct {
 	Profile     Profile
 	AgentBinSrc string
-	WrapperSrc  string
 }
 
 type dockerfileView struct {
 	BaseImage   string
-	RuntimeType string
 	AgentBinSrc string
-	WrapperSrc  string
 	Bin         string
-	Startup     string
+	CMDLine     string
 	Tools       []string
 	Run         []string
 }
@@ -55,10 +31,8 @@ USER root
 WORKDIR /app
 
 COPY {{.AgentBinSrc}} /usr/local/bin/vmdocker-agent
-COPY {{.WrapperSrc}} /usr/local/bin/start-vmdocker-agent.sh
 
 COPY {{.Bin}}/ /usr/local/bin/
-COPY {{.Startup}} /usr/local/lib/vmdocker-agent/user-startup.sh
 COPY profile.toml /home/hymx/profile.toml
 {{if .Tools}}RUN set -eux; \
     if command -v apt-get >/dev/null 2>&1; then apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends {{range .Tools}}{{.}} {{end}}&& rm -rf /var/lib/apt/lists/*; \
@@ -71,44 +45,84 @@ COPY profile.toml /home/hymx/profile.toml
     rm -f /etc/sudoers.d/*
 {{range .Run}}RUN {{.}}
 {{end}}RUN set -eux; \
-    chmod +x /usr/local/bin/* /usr/local/bin/start-vmdocker-agent.sh /usr/local/lib/vmdocker-agent/user-startup.sh; \
+    chmod +x /usr/local/bin/*; \
     chown -R hymx:hymx /home/hymx /app
 ENV HOME=/home/hymx
-ENV RUNTIME_TYPE={{.RuntimeType}}
 USER hymx
 WORKDIR /home/hymx
-ENTRYPOINT ["/usr/local/bin/start-vmdocker-agent.sh"]
-`))
+ENTRYPOINT ["/usr/local/bin/vmdocker-agent"]
+{{if .CMDLine}}{{.CMDLine}}
+{{end}}`))
 
 // GenerateDockerfile renders the standardized Dockerfile from a profile.
+// FROM is used verbatim as the base image name; RUNTIME_TYPE is not a build-time
+// concern (it is supplied at spawn via the Container-Env-RUNTIME_TYPE tag).
 func GenerateDockerfile(in DockerfileInput) (string, error) {
-	base, err := ResolveFROM(in.Profile.Dockerfile.From)
-	if err != nil {
-		return "", err
-	}
 	d := in.Profile.Dockerfile
+	if strings.TrimSpace(d.From) == "" {
+		return "", fmt.Errorf("profile [dockerfile].FROM is required")
+	}
 	if strings.TrimSpace(d.Bin) == "" {
 		return "", fmt.Errorf("profile [dockerfile].bin is required")
 	}
-	if strings.TrimSpace(d.Startup) == "" {
-		return "", fmt.Errorf("profile [dockerfile].startup is required")
+	if strings.TrimSpace(in.AgentBinSrc) == "" {
+		return "", fmt.Errorf("platform AgentBinSrc is required")
 	}
-	if strings.TrimSpace(in.AgentBinSrc) == "" || strings.TrimSpace(in.WrapperSrc) == "" {
-		return "", fmt.Errorf("platform AgentBinSrc and WrapperSrc are required")
+	cmdLine, err := renderCMD(d.CMD)
+	if err != nil {
+		return "", err
 	}
 
 	var buf bytes.Buffer
 	if err := dockerfileTmpl.Execute(&buf, dockerfileView{
-		BaseImage:   base.Image,
-		RuntimeType: base.RuntimeType,
+		BaseImage:   d.From,
 		AgentBinSrc: in.AgentBinSrc,
-		WrapperSrc:  in.WrapperSrc,
 		Bin:         d.Bin,
-		Startup:     d.Startup,
+		CMDLine:     cmdLine,
 		Tools:       d.Tools,
 		Run:         d.Run,
 	}); err != nil {
 		return "", fmt.Errorf("render Dockerfile: %w", err)
 	}
 	return buf.String(), nil
+}
+
+// renderCMD returns the Dockerfile CMD instruction for a [dockerfile].CMD value,
+// or "" when no CMD is set. A string is shell form (CMD <string>); a string
+// array is exec form (CMD ["a","b"]). Any other shape is an error.
+func renderCMD(raw any) (string, error) {
+	switch v := raw.(type) {
+	case nil:
+		return "", nil
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return "", nil
+		}
+		return "CMD " + v, nil
+	case []string:
+		return execCMDLine(v)
+	case []any:
+		args := make([]string, len(v))
+		for i, e := range v {
+			s, ok := e.(string)
+			if !ok {
+				return "", fmt.Errorf("[dockerfile].CMD exec form: element %d is %T, want string", i, e)
+			}
+			args[i] = s
+		}
+		return execCMDLine(args)
+	default:
+		return "", fmt.Errorf("[dockerfile].CMD must be a string (shell form) or an array of strings (exec form), got %T", raw)
+	}
+}
+
+func execCMDLine(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", nil
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		return "", fmt.Errorf("render CMD exec form: %w", err)
+	}
+	return "CMD " + string(b), nil
 }

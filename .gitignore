@@ -40,3 +40,16 @@ checkpoint
 go.sum
 
 /cmd/sandbox_workspace
+/docs/superpowers
+
+# Runtime-generated module store. V2 modules embed a full container image
+# (hundreds of MB); exports and cmd/module builds drop mod-<id>.json here.
+# Small fixtures already committed under cmd/mod/ stay tracked (git ignore does
+# not untrack); only new blobs are ignored. Mirrors /cmd/sandbox_workspace.
+/cmd/mod/
+
+# Stray local build artifact (e.g. `go build ./cmd/module` -> ./module) and
+# local test scaffolding.
+/module
+/testagent/
+/.scratch

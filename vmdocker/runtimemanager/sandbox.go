@@ -170,20 +170,13 @@ func (sm *SandboxManager) startSandboxRuntime(ctx context.Context, pid string, r
 		return fmt.Errorf("sandbox filesystem lockdown failed: %w", err)
 	}
 
-	command := runtimeSpec.StartCommand
-	if command != "" {
-		command, err = buildBackgroundRuntimeCommand(runtimeSpec.StartCommand)
-		if err != nil {
-			return fmt.Errorf("build sandbox start command failed: %w", err)
-		}
-	} else {
-		command = runtimeSpec.Sandbox.Command
+	inspect, err := sm.inspectTemplateImage(ctx, runtimeSpec.Image.Name)
+	if err != nil {
+		return fmt.Errorf("inspect sandbox image for launch command: %w", err)
 	}
-	if command == "" {
-		command, err = buildBackgroundRuntimeCommand("")
-		if err != nil {
-			return fmt.Errorf("build sandbox start command failed: %w", err)
-		}
+	command, err := buildSandboxLaunchCommand(inspect.Config.Entrypoint, inspect.Config.Cmd)
+	if err != nil {
+		return fmt.Errorf("build sandbox launch command: %w", err)
 	}
 	log.Debug("executing sandbox runtime start command", "pid", pid, "sandbox_name", instance.ID, "command", command, "env_count", len(runtimeEnv))
 
@@ -270,6 +263,10 @@ func (sm *SandboxManager) ensureSandboxCLI(ctx context.Context) error {
 type dockerImageInspectResult struct {
 	ID          string   `json:"Id"`
 	RepoDigests []string `json:"RepoDigests"`
+	Config      struct {
+		Entrypoint []string `json:"Entrypoint"`
+		Cmd        []string `json:"Cmd"`
+	} `json:"Config"`
 }
 
 func (sm *SandboxManager) ensureTemplateExists(ctx context.Context, imageInfo schema.ImageInfo) error {
@@ -394,4 +391,33 @@ func buildSandboxFilesystemLockdownCommand() string {
 		"if [ -d /tmp ]; then chown root:root /tmp 2>/dev/null || true; chmod 0755 /tmp 2>/dev/null || true; fi",
 		"if [ -d /var/tmp ]; then chown root:root /var/tmp 2>/dev/null || true; chmod 0755 /var/tmp 2>/dev/null || true; fi",
 	}, " && ")
+}
+
+// buildSandboxLaunchCommand composes the backgrounded shell command the sandbox
+// runs, from the image's baked ENTRYPOINT + CMD (as read from `docker image
+// inspect`). This mirrors the docker backend, where the container runs the
+// image's ENTRYPOINT + CMD; both backends now source the command from the image.
+func buildSandboxLaunchCommand(entrypoint, cmd []string) (string, error) {
+	argv := make([]string, 0, len(entrypoint)+len(cmd))
+	argv = append(argv, entrypoint...)
+	argv = append(argv, cmd...)
+	if len(argv) == 0 {
+		return "", fmt.Errorf("image has no ENTRYPOINT or CMD to launch")
+	}
+	return fmt.Sprintf("mkdir -p \"${TMPDIR:-/tmp}\" && %s >\"${TMPDIR:-/tmp}/vmdocker-agent.log\" 2>&1 &", shellEscapeCommand(argv)), nil
+}
+
+func shellEscapeCommand(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, shellEscapeArg(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellEscapeArg(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }

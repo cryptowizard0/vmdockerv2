@@ -1,5 +1,5 @@
 // Command vmme2e is a thin end-to-end driver for the host-side capability
-// operations (seed / export / import) that are handled inside vmdocker.Apply and
+// operations (seed / export) that are handled inside vmdocker.Apply and
 // therefore cannot be reached by curling the container's /vmm. It wraps the real
 // production code (no new logic) so scripts/e2e_capability.sh can drive a
 // real-container round-trip and the hardening negative cases. See the plan:
@@ -10,8 +10,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -31,10 +29,10 @@ func main() {
 	switch os.Args[1] {
 	case "seed":
 		err = cmdSeed(os.Args[2:])
+	case "seed-clone":
+		err = cmdSeedClone(os.Args[2:])
 	case "export":
 		err = cmdExport(os.Args[2:])
-	case "import":
-		err = cmdImport(os.Args[2:])
 	case "pack-synthetic":
 		err = cmdPackSynthetic(os.Args[2:])
 	default:
@@ -54,7 +52,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: vmme2e <seed|export|import|pack-synthetic> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: vmme2e <seed|seed-clone|export|pack-synthetic> [flags]")
 	os.Exit(2)
 }
 
@@ -100,17 +98,6 @@ func require(f map[string]string, key string) (string, error) {
 	return "", fmt.Errorf("missing required flag --%s", key)
 }
 
-func atoi64(s string, def int64) int64 {
-	if s == "" {
-		return def
-	}
-	var n int64
-	if _, err := fmt.Sscan(s, &n); err != nil {
-		return def
-	}
-	return n
-}
-
 // seed exercises the real spawn-time seeding of profile.toml into the workspace.
 // The module file must be resolvable relative to CWD (mod/mod-<id>.json or
 // mod-<id>.json), matching resolveModuleFilePath in the runtime.
@@ -135,7 +122,32 @@ func cmdSeed(args []string) error {
 	return nil
 }
 
-// export runs the real host-side Export (rebuilds the image + packs public.zip).
+// seed-clone exercises the real spawn-time seeding of profile.toml AND public.zip
+// into a fresh workspace. The module file must be resolvable relative to CWD
+// (mod/mod-<id>.json), matching resolveModuleFilePath in the runtime.
+func cmdSeedClone(args []string) error {
+	f := flagset(args)
+	id, err := require(f, "module-id")
+	if err != nil {
+		return err
+	}
+	ws, err := require(f, "workspace")
+	if err != nil {
+		return err
+	}
+	format := f["archive-format"]
+	if format == "" {
+		format = runtimeSchema.ImageArchiveContainerTarGZ
+	}
+	if err := vmdocker.SeedWorkspaceFromModule(id, ws, format); err != nil {
+		return err
+	}
+	fmt.Printf("seeded clone workspace %s\n", ws)
+	return nil
+}
+
+// export runs the real host-side Export (Option A: reuses the provided image
+// archive + packs a fresh public.zip from the workspace; no rebuild).
 func cmdExport(args []string) error {
 	f := flagset(args)
 	ws, err := require(f, "workspace")
@@ -146,10 +158,18 @@ func cmdExport(args []string) error {
 	if err != nil {
 		return err
 	}
-	res, err := capability.Export(context.Background(), ws, capability.ExportOptions{
-		AgentBinPath: f["agent-bin"],
-		WrapperPath:  f["wrapper"],
-		BuildTag:     f["build-tag"],
+	imagePath, err := require(f, "image-archive")
+	if err != nil {
+		return err
+	}
+	imageArchive, err := os.ReadFile(imagePath)
+	if err != nil {
+		return err
+	}
+	res, err := capability.Export(ws, capability.ExportOptions{
+		ImageArchive: imageArchive,
+		ImageName:    f["image-name"],
+		ImageID:      f["image-id"],
 		SignerKey:    f["signer-key"],
 	})
 	if err != nil {
@@ -159,35 +179,6 @@ func cmdExport(args []string) error {
 		return err
 	}
 	fmt.Printf("exported module %s (%d public files)\n", out, len(res.Collection.Entries))
-	return nil
-}
-
-// import applies a module's public.zip into the target workspace via the real
-// capability.Import, printing the ImportResult and exiting non-zero on error.
-func cmdImport(args []string) error {
-	f := flagset(args)
-	ws, err := require(f, "workspace")
-	if err != nil {
-		return err
-	}
-	modFile, err := require(f, "module-file")
-	if err != nil {
-		return err
-	}
-	moduleBytes, err := os.ReadFile(modFile)
-	if err != nil {
-		return err
-	}
-	res, err := capability.Import(ws, moduleBytes, capability.ImportOptions{
-		OnConflict:     f["on-conflict"],
-		MaxBytes:       atoi64(f["max-bytes"], 0),
-		MaxModuleBytes: atoi64(f["max-module-bytes"], 0),
-	})
-	if err != nil {
-		return err
-	}
-	b, _ := json.Marshal(res)
-	fmt.Println(string(b))
 	return nil
 }
 
@@ -288,7 +279,7 @@ func zipDir(dir string) ([]byte, error) {
 }
 
 // stubImageArchive returns a small gzip payload standing in for image.tar.gz;
-// import never reads the image member, so any non-empty bytes suffice.
+// nothing in this driver reads the image member, so any non-empty bytes suffice.
 func stubImageArchive() []byte {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)

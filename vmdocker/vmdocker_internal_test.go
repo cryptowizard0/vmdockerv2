@@ -27,8 +27,7 @@ func TestWorkspaceCheckpointJSONRoundTrip(t *testing.T) {
 		RuntimeState:            `{"format":"openclaw.runtime.v1","sessionId":"sess-1"}`,
 		Backend:                 "docker",
 		RuntimeSpec: runtimeSchema.RuntimeSpec{
-			Backend:      "docker",
-			StartCommand: "/app/start-runtime.sh",
+			Backend: "docker",
 			Image: runtimeSchema.ImageInfo{
 				Name: "image:test",
 				SHA:  "sha256:test",

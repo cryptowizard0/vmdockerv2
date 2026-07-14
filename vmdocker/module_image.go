@@ -18,7 +18,9 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/cryptowizard0/vmdockerv2/vmdocker/capability"
 	runtimeSchema "github.com/cryptowizard0/vmdockerv2/vmdocker/runtimemanager/schema"
+	goarSchema "github.com/permadao/goar/schema"
 )
 
 var dockerLookPath = exec.LookPath
@@ -222,6 +224,54 @@ func (r *modulePayloadReader) Close() error {
 
 func extractImageFromContainerTar(r io.Reader) (io.ReadCloser, error) {
 	return extractMemberFromContainerTar(r, "image.tar.gz", maxModuleMemberBytes)
+}
+
+// readModuleImageArchive reads the image.tar.gz member out of a module's
+// container-tar payload and returns it fully in memory. Export (Option A) uses
+// it to reuse the running agent's existing image instead of rebuilding: the
+// image-build inputs (bin/, CMD) live baked in the image, not in the
+// runtime workspace, so a rebuild is impossible — but the exact image bytes are
+// already in the module the process was spawned from.
+func readModuleImageArchive(moduleID, archiveFormat string) ([]byte, error) {
+	if archiveFormat != runtimeSchema.ImageArchiveContainerTarGZ {
+		return nil, fmt.Errorf("module %s image archive format %q is not reusable for export", moduleID, archiveFormat)
+	}
+	payload, err := openModulePayloadGzip(moduleID)
+	if err != nil {
+		return nil, fmt.Errorf("read module %s payload stream failed: %w", moduleID, err)
+	}
+	defer payload.Close()
+
+	rc, err := extractImageFromContainerTar(payload)
+	if err != nil {
+		return nil, fmt.Errorf("extract image.tar.gz from module %s failed: %w", moduleID, err)
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
+}
+
+// persistModuleToStore parses the exported module's BundleItem id and writes the
+// full module JSON into the node's module store (mod/mod-<id>.json — the path
+// resolveModuleFilePath loads from), returning the id. Export uses this instead
+// of returning the module bytes through the result channel: the module embeds
+// the full container image (hundreds of MB) and would blow past redis's
+// proto-max-bulk-len if routed as a message result.
+func persistModuleToStore(moduleBytes []byte) (string, error) {
+	var item goarSchema.BundleItem
+	if err := json.Unmarshal(moduleBytes, &item); err != nil {
+		return "", fmt.Errorf("parse exported module: %w", err)
+	}
+	if item.Id == "" {
+		return "", fmt.Errorf("exported module has empty id")
+	}
+	path := moduleFilePath(item.Id)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, moduleBytes, 0o644); err != nil {
+		return "", fmt.Errorf("write module %s: %w", item.Id, err)
+	}
+	return item.Id, nil
 }
 
 func extractMemberFromContainerTar(r io.Reader, memberName string, maxBytes int64) (io.ReadCloser, error) {
@@ -536,4 +586,81 @@ func readExactBytes(reader *bufio.Reader, n int) ([]byte, error) {
 		return nil, err
 	}
 	return buf, nil
+}
+
+// SeedWorkspaceFromModule exposes seedWorkspaceFromModule for out-of-package
+// tooling (the e2e driver). It resolves the module file relative to the current
+// working directory, like the runtime spawn path.
+func SeedWorkspaceFromModule(moduleID, workspace, archiveFormat string) error {
+	return seedWorkspaceFromModule(moduleID, workspace, archiveFormat)
+}
+
+// seedWorkspaceFromModule writes the module's profile.toml into workspace and,
+// if the module carries a public.zip member, unpacks it into workspace — both in
+// a single pass over the container tar. It is the spawn-time seed for a freshly
+// created (empty) workspace. A missing public.zip member is a no-op (build-flow
+// modules have none); a non-container-tar archive format is a no-op.
+func seedWorkspaceFromModule(moduleID, workspace, archiveFormat string) error {
+	if archiveFormat != runtimeSchema.ImageArchiveContainerTarGZ {
+		return nil
+	}
+	payload, err := openModulePayloadGzip(moduleID)
+	if err != nil {
+		return fmt.Errorf("read module %s payload stream failed: %w", moduleID, err)
+	}
+	defer payload.Close()
+
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		return err
+	}
+
+	tr := tar.NewReader(payload)
+	seededProfile := false
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("read module container tar: %w", err)
+		}
+		switch hdr.Name {
+		case "profile.toml":
+			if hdr.Size > 1<<20 {
+				return fmt.Errorf("profile.toml member %d bytes exceeds %d", hdr.Size, 1<<20)
+			}
+			data, err := io.ReadAll(io.LimitReader(tr, 1<<20))
+			if err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(workspace, "profile.toml"), data, 0o644); err != nil {
+				return err
+			}
+			seededProfile = true
+		case "public.zip":
+			// public.zip is fully buffered into memory here, so bound it by the
+			// same limit UnpackPublicZip enforces (DefaultMaxBytes, 64 MiB) rather
+			// than the 1 GiB image-member limit. Otherwise a hostile module could
+			// force the host to buffer up to 1 GiB before unpack rejects it — a
+			// memory-pressure vector. The LimitReader caps the read even when a
+			// crafted tar header understates hdr.Size.
+			if hdr.Size > capability.DefaultMaxBytes {
+				return fmt.Errorf("public.zip member %d bytes exceeds %d", hdr.Size, capability.DefaultMaxBytes)
+			}
+			data, err := io.ReadAll(io.LimitReader(tr, capability.DefaultMaxBytes+1))
+			if err != nil {
+				return err
+			}
+			if int64(len(data)) > capability.DefaultMaxBytes {
+				return fmt.Errorf("public.zip member exceeds %d bytes", capability.DefaultMaxBytes)
+			}
+			if err := capability.UnpackPublicZip(workspace, data); err != nil {
+				return err
+			}
+		}
+	}
+	if !seededProfile {
+		return fmt.Errorf("profile.toml member not found in module container tar")
+	}
+	return nil
 }
