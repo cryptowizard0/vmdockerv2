@@ -2,12 +2,13 @@
 
 // Heavyweight, opt-in end-to-end test: real `docker build` -> real signed module
 // -> real in-process vmdocker.Spawn -> a real container boots with the adapter
-// serving /vmm/health -> the spawned agent's HOME carries the module's public
-// content. No hymx node involved.
+// serving /vmm/health, the image CMD runs, and the spawned agent's HOME carries
+// the module's public content. No hymx node involved.
 //
 // It is excluded from `go test ./...` by the build tag and skips cleanly when its
 // heavy dependencies (docker, a pullable base image, the adapter binary) are
-// absent. Run explicitly:
+// absent. Run explicitly (point VMDOCKER_AGENT_BIN at an adapter built from the
+// ticket-02 branch of the sibling vmdocker_agent repo):
 //
 //	go test -tags e2e_realspawn ./vmdocker/ -run TestRealBuildSpawn -v
 //
@@ -38,12 +39,45 @@ const (
 	realSpawnBaseImage = "docker/sandbox-templates:claude-code"
 	realSpawnModuleID  = "realspawn"
 	realSpawnMarker    = "SOUL-real-build-spawn"
+	realSpawnCmdMarker = "CMD-real-build-spawn"
 )
 
+// TestRealBuildSpawn proves a profile [dockerfile].CMD actually executes at
+// runtime: the image is built with a CMD that writes a marker into HOME, and the
+// host observes both the seeded public content (spawn + serve OK) and the marker
+// the CMD produced (the command ran under the adapter).
 func TestRealBuildSpawn(t *testing.T) {
 	ctx := context.Background()
+	agentBin := realSpawnPreconditions(t, ctx)
 
-	// --- preconditions: skip (never fail) when the heavy deps are absent ---
+	ws := buildSpawnAndWorkspace(t, ctx, agentBin, "cmd", func(dir string) {
+		// The CMD writes a marker into HOME (the bind-mounted per-pid workspace),
+		// so the host can observe that the adapter actually ran the image CMD.
+		writeRealSpawnFixture(t, dir, `CMD = ["sh", "-c", "echo `+realSpawnCmdMarker+` > $HOME/cmd-ran.txt"]`)
+	})
+
+	// spawn + serve: the module's public content is seeded into HOME.
+	assertFileEventually(t, filepath.Join(ws, "skills", "soul.md"), realSpawnMarker)
+	// the image CMD executed: it wrote its marker into HOME.
+	assertFileEventually(t, filepath.Join(ws, "cmd-ran.txt"), realSpawnCmdMarker)
+}
+
+// TestRealBuildSpawnNoCMD proves a module that declares no CMD still spawns and
+// serves: the adapter runs no user command, and the public content is still seeded.
+func TestRealBuildSpawnNoCMD(t *testing.T) {
+	ctx := context.Background()
+	agentBin := realSpawnPreconditions(t, ctx)
+
+	ws := buildSpawnAndWorkspace(t, ctx, agentBin, "nocmd", func(dir string) {
+		writeRealSpawnFixture(t, dir, "") // no CMD
+	})
+	assertFileEventually(t, filepath.Join(ws, "skills", "soul.md"), realSpawnMarker)
+}
+
+// realSpawnPreconditions skips (never fails) when the heavy deps are absent and
+// returns the linux adapter binary path.
+func realSpawnPreconditions(t *testing.T, ctx context.Context) string {
+	t.Helper()
 	if _, err := run(ctx, "docker", "info"); err != nil {
 		t.Skip("docker daemon not reachable; skipping real build+spawn e2e")
 	}
@@ -51,17 +85,24 @@ func TestRealBuildSpawn(t *testing.T) {
 	if out, err := run(ctx, "docker", "pull", realSpawnBaseImage); err != nil {
 		t.Skipf("cannot pull base image %s; skipping. docker said:\n%s", realSpawnBaseImage, out)
 	}
+	return agentBin
+}
 
-	// --- isolate CWD: mod/<id>.json and sandbox_workspace/<pid> resolve here ---
+// buildSpawnAndWorkspace runs the full real path (docker build -> sign -> in-process
+// spawn) for the given profile fixture and returns the host-side per-pid workspace
+// directory (HOME), where seeded and CMD-written files are observable.
+func buildSpawnAndWorkspace(t *testing.T, ctx context.Context, agentBin, label string, writeFixture func(dir string)) string {
+	t.Helper()
+
+	// isolate CWD: mod/<id>.json and sandbox_workspace/<pid> resolve here.
 	runDir := t.TempDir()
 	t.Chdir(runDir)
 	if err := os.MkdirAll("mod", 0o755); err != nil {
 		t.Fatalf("mkdir mod: %v", err)
 	}
 
-	// --- profile fixture carrying public content ---
 	profileDir := t.TempDir()
-	writeRealSpawnFixture(t, profileDir)
+	writeFixture(profileDir)
 	profileTOML, err := os.ReadFile(filepath.Join(profileDir, "profile.toml"))
 	if err != nil {
 		t.Fatalf("read profile: %v", err)
@@ -90,7 +131,7 @@ func TestRealBuildSpawn(t *testing.T) {
 	}
 
 	// --- REAL in-process spawn ---
-	pid := "realspawn-" + time.Now().Format("20060102-150405")
+	pid := "realspawn-" + label + "-" + time.Now().Format("150405.000")
 	container := runtimemanager.ContainerNamePrefix + pid
 	t.Cleanup(func() { _, _ = run(context.Background(), "docker", "rm", "-f", container) })
 
@@ -107,25 +148,13 @@ func TestRealBuildSpawn(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = vm.Close() })
 
-	// --- assert: the spawned agent's HOME carries the module's public content ---
-	// Read it host-side from the bind-mounted per-pid workspace — backend-agnostic
-	// (works for both the Docker and Docker Sandbox backends; a plain `docker exec`
-	// would not, since the Sandbox backend uses a truncated name + `docker sandbox exec`).
-	seeded := filepath.Join(runDir, "sandbox_workspace", pid, "skills", "soul.md")
-	b, err := os.ReadFile(seeded)
-	if err != nil {
-		dumpAdapterLogs(t, container)
-		t.Fatalf("read seeded public file (host workspace %s): %v", seeded, err)
-	}
-	if got := strings.TrimSpace(string(b)); got != realSpawnMarker {
-		t.Fatalf("public content in spawned agent = %q, want %q", got, realSpawnMarker)
-	}
-	t.Logf("real build + spawn OK: pid %s served /vmm/health 200 and carries skills/soul.md == %q", pid, realSpawnMarker)
+	return filepath.Join(runDir, "sandbox_workspace", pid)
 }
 
-// writeRealSpawnFixture lays out a minimal buildable profile whose public
-// content is a single skills/soul.md marker.
-func writeRealSpawnFixture(t *testing.T, dir string) {
+// writeRealSpawnFixture lays out a minimal buildable profile whose public content
+// is a single skills/soul.md marker. cmdLine, when non-empty, is inserted verbatim
+// into [dockerfile] (e.g. `CMD = [...]`); empty omits CMD entirely.
+func writeRealSpawnFixture(t *testing.T, dir, cmdLine string) {
 	t.Helper()
 	must := func(err error) {
 		t.Helper()
@@ -133,20 +162,39 @@ func writeRealSpawnFixture(t *testing.T, dir string) {
 			t.Fatal(err)
 		}
 	}
-	must(os.WriteFile(filepath.Join(dir, "profile.toml"), []byte(`[dockerfile]
-FROM = "docker/sandbox-templates:claude-code"
-bin = "bin"
-startup = "start.sh"
+	profile := "[dockerfile]\n" +
+		"FROM = \"docker/sandbox-templates:claude-code\"\n" +
+		"bin = \"bin\"\n"
+	if cmdLine != "" {
+		profile += cmdLine + "\n"
+	}
+	profile += "\n[vmdocker]\npublic = [\"~/skills/*\"]\n"
 
-[vmdocker]
-public = ["~/skills/*"]
-`), 0o644))
+	must(os.WriteFile(filepath.Join(dir, "profile.toml"), []byte(profile), 0o644))
 	must(os.MkdirAll(filepath.Join(dir, "bin"), 0o755))
 	must(os.WriteFile(filepath.Join(dir, "bin", ".keep"), []byte("keep\n"), 0o644))
-	// start.sh is the author hook; claude readiness is CLI-on-PATH, so a no-op is fine.
-	must(os.WriteFile(filepath.Join(dir, "start.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
 	must(os.MkdirAll(filepath.Join(dir, "skills"), 0o755))
 	must(os.WriteFile(filepath.Join(dir, "skills", "soul.md"), []byte(realSpawnMarker), 0o644))
+}
+
+// assertFileEventually polls for path to exist and (trimmed) equal want, up to a
+// timeout — the CMD runs in the background under the adapter, so its marker may
+// appear shortly after spawn returns.
+func assertFileEventually(t *testing.T, path, want string) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	var last string
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(path); err == nil {
+			got := strings.TrimSpace(string(b))
+			if got == want {
+				return
+			}
+			last = got
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("%s did not become %q within timeout (last read: %q)", path, want, last)
 }
 
 // resolveAdapterBinary returns a linux adapter binary path, or skips the test.
@@ -210,6 +258,6 @@ func run(ctx context.Context, name string, args ...string) (string, error) {
 func dumpAdapterLogs(t *testing.T, container string) {
 	t.Helper()
 	if out, err := run(context.Background(), "docker", "logs", "--tail", "80", container); err == nil {
-		t.Logf("adapter/start.sh logs for %s:\n%s", container, out)
+		t.Logf("adapter logs for %s:\n%s", container, out)
 	}
 }
