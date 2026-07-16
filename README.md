@@ -1,482 +1,332 @@
 <div align="center">
 
-# 🐳 VMDocker V2
+# VMDocker V2
 
-**A Docker-based Virtual Machine Implementation for HyMatrix Computing Network**
+**Container runtime for HyMatrix**
 
-[![Go Version](https://img.shields.io/badge/Go-1.24.2-blue.svg)](https://golang.org/)
-[![Docker](https://img.shields.io/badge/Docker-28.0.x-blue.svg)](https://www.docker.com/)
+[![Go](https://img.shields.io/badge/Go-1.24.2-blue.svg)](go.mod)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![HyMatrix](https://img.shields.io/badge/HyMatrix-Compatible-orange.svg)](https://hymatrix.com/)
+
+[简体中文](README_zh.md)
 
 </div>
 
-## 📖 Overview
+VMDocker V2 packages Docker images as signed, distributable, verifiable HyMatrix Modules and runs them in isolated `docker` or `sandbox` backends.
 
-**VMDocker** is a high-performance, Docker-based virtual machine implementation designed for the HyMatrix computing network. It serves as a universal virtual machine extension that can be seamlessly mounted to HyMatrix nodes, enabling scalable and verifiable computation execution.
+**Module Format:** `hymx.vmdockerv2.v0.0.1`
 
-### 🌟 Key Features
+## Where to start
 
-- **🔌 Universal VM Interface**: Compatible with standard HyMatrix VM protocol
-- **🐳 Docker-based**: Leverages Docker containers for isolated computation environments
-- **🔄 Multi-Architecture Support**: Supports EVM, WASM, AO, LLM model services, and more
-- **📊 Checkpoint & Restore**: Advanced state management with CRIU integration
-- **⚡ High Performance**: Optimized for scalable computation workloads
-- **🔗 AO Compatible**: Full support for AO protocol containers
+| Goal | Start here |
+|---|---|
+| Understand the project | [Architecture](#2-architecture) |
+| Validate the repository | [Quick start](#3-quick-start) |
+| Build your own Module | [Build and run a Module](#4-build-and-run-a-module) |
+| Run build → Spawn → Export → re-Spawn | [Manual end-to-end round trip](docs/manual-roundtrip-test.md) |
+| Troubleshoot runtime issues | [Troubleshooting](#8-troubleshooting) |
 
-### 🏗️ Architecture
+## 1. Overview
 
-```
-┌─────────┐    ┌──────────┐    ┌───────────┐
-│ HyMatrix│───▶│VMDocker  │───▶│Container  │
-│  Node   │    │ Manager  │    │(EVM/WASM) │
-└─────────┘    └──────────┘    └───────────┘
-```
+VMDocker V2 is a VM extension for HyMatrix nodes. On Spawn, it validates the Module, prepares its image and workspace, starts the runtime, and forwards VM calls through `/vmm/*` endpoints.
 
-### 🔗 About HyMatrix
+V2 builds at Module creation time, not at Spawn time. A Module carries its compressed image, `profile.toml`, and optional `public.zip`, so the runtime host does not need a Dockerfile or an online rebuild.
 
-**HyMatrix** is an infinitely scalable decentralized computing network that decouples computation from consensus by anchoring execution logs in immutable storage (Arweave), enabling verifiable, trustless computation anywhere.
+Typical use cases:
 
-🌐 **Learn more**: [https://hymatrix.com/](https://hymatrix.com/)
+- Run containerized workloads on a HyMatrix node.
+- Package Claude, OpenClaw, or a custom agent as a Module.
+- Isolate per-process workspaces with controlled export.
 
-### 🛠️ VM Interface
+## 2. Architecture
 
-VMDocker implements the standard HyMatrix VM interface:
-
-```go
-// hymx/vmm/schema/schema.go
-type Vm interface {
-    Apply(from string, meta Meta) (res *Result, err error)
-    Checkpoint() (data string, err error)
-    Restore(data string) error
-    Close() error
-}
+```mermaid
+flowchart LR
+    P["profile.toml + bin/"] --> B["cmd/module"]
+    A["vmdocker-agent"] --> B
+    B --> M["Signed Module<br/>image.tar.gz + profile.toml + public.zip"]
+    M --> N["HyMatrix Node"]
+    N --> V["vmdocker.Spawn"]
+    V --> R["docker / sandbox"]
+    R --> E["/vmm/health<br/>/vmm/spawn<br/>/vmm/apply"]
 ```
 
-**Supported Container Types**:
-- 🔷 **EVM**: Ethereum Virtual Machine
-- 🟦 **WASM**: WebAssembly runtime
-- 🟠 **AO**: Arweave AO protocol ([Container Repository](https://github.com/cryptowizard0/vmdocker_container))
-- 🤖 **LLM**: Large Language Model services
-- ➕ **Custom**: Any containerized computation environment
+The request path is:
 
-## 🚀 Getting Started
+1. Module authors declare the base image, tools, command, and public files in `profile.toml`.
+2. `cmd/module` generates a standard Dockerfile, builds and saves the image, then signs `mod-<id>.json`.
+3. On Spawn, the node validates the format and image digest, loading the image from the Module on a cache miss.
+4. Each process gets an isolated workspace, while the embedded `vmdocker-agent` serves the VM HTTP protocol.
 
-### 📋 Prerequisites
+## 3. Quick start
 
-| Component | Version | Platform | Required |
-|-----------|---------|----------|----------|
-| **Operating System** | Linux | Any | ✅ |
-| **Go** | 1.24.2 | Any | ✅ |
-| **Docker** | 28.0.x | Any | ✅ |
-| **Redis** | Latest | Any | ✅ |
-| **Clang/GCC** | Latest | Any | ✅ (for CGO) |
-| **CRIU** | v4.1 | Linux only | ⚠️ (for checkpoint) |
+### 3.1 Prerequisites
 
-> ⚠️ **Note**: CRIU is only required for checkpoint functionality and is Linux-specific. macOS users can skip CRIU installation.
+| Dependency | Purpose |
+|---|---|
+| Go 1.24.2+ | Build and test `vmdockerv2` |
+| Go 1.25+ | Build the sibling `vmdocker_agent` repository when authoring Modules |
+| Docker CLI and daemon | Build Modules and run container workloads |
+| Redis | Start the HyMatrix node |
+| `vmdocker_agent` | Required only when authoring a Module |
 
-### 📦 Installation
+Linux defaults to `docker`. macOS and Windows default to `sandbox` and require Docker Desktop with `docker sandbox`; `docker` can also be selected explicitly at Spawn time.
 
-#### 1. Clone Repository
+### 3.2 Validate the repository
 
 ```bash
 git clone https://github.com/cryptowizard0/vmdockerv2.git
 cd vmdockerv2
-```
 
-#### 2. Install Dependencies
-
-```bash
-go mod tidy
-```
-
-#### 3. Build VMDocker
-
-```bash
+go test ./...
 go build -o ./build/hymx-node ./cmd
 ```
 
-#### 4. Install System Dependencies
+Success means the tests pass and `build/hymx-node` is created.
 
-**Ubuntu/Debian:**
-```bash
-sudo apt-get update
-sudo apt-get install gcc build-essential redis-server
-```
+### 3.3 Start a local node
 
-**CentOS/RHEL:**
-```bash
-sudo yum install gcc gcc-c++ make redis
-```
-
-### 🔧 Optional: CRIU Installation (Linux Only)
-
-> 📝 **Required for**: Checkpoint and restore functionality
-> 🖥️ **Platform**: Linux systems only
-
-#### Install CRIU v4.1
+Start Redis first:
 
 ```bash
-# Download CRIU v4.1 source code
-wget https://github.com/checkpoint-restore/criu/archive/criu_v4.1.tar.gz
-tar -xzf criu_v4.1.tar.gz
-cd criu-criu_v4.1
-
-# Compile and install
-make
-sudo make install
-
-# Verify installation
-criu check
-# Expected output: "Looks good."
+docker run -d --name vmdockerv2-redis -p 6379:6379 redis:7-alpine
 ```
 
-### 🐳 Docker Configuration
-
-> ⚠️ **Important**: Docker version `28.0.x` is required for optimal compatibility.
-
-#### Enable Experimental Features
-
-Docker checkpoint requires experimental features to be enabled:
+Start the node with the repository's development config. It contains a public test key and must never be used in production.
 
 ```bash
-# Create Docker daemon configuration
-sudo mkdir -p /etc/docker
-
-# Enable experimental features
-sudo tee /etc/docker/daemon.json <<-'EOF'
-{
-  "experimental": true
-}
-EOF
-
-# Restart Docker service
-sudo systemctl restart docker
-
-# Verify experimental features are enabled
-docker info | grep "Experimental"
-# Expected output: "Experimental: true"
+./build/hymx-node --config ./cmd/config.yaml
 ```
 
-## ⚙️ Configuration
+Verify it from another terminal:
 
-### 📝 Create Configuration File
-
-VMDocker uses standard HyMatrix configuration format. Create a `config.yaml` file:
-
-```yaml
-# 🌐 Node Service Configuration
-port: :8080
-ginMode: release  # Options: "debug", "release"
-
-# 🔴 Redis Configuration
-redisURL: redis://@localhost:6379/0
-
-# 🌍 Storage & Network
-arweaveURL: https://arweave.net
-hymxURL: http://127.0.0.1:8080
-
-# 🔐 Node Identity (Wallet)
-prvKey: 0x64dd2342616f385f3e8157cf7246cf394217e13e8f91b7d208e9f8b60e25ed1b
-keyfilePath:  # Optional: path to keyfile instead of prvKey
-
-# ℹ️ Node Information
-nodeName: test1
-nodeDesc: first test node
-nodeURL: http://127.0.0.1:8080
-
-# 🔗 Network Participation
-joinNetwork: false  # Set to true for production network
+```bash
+curl -fsS http://127.0.0.1:8080/info
 ```
 
-### 📊 Configuration Reference
+A JSON node response confirms the HTTP service is ready. `/vmm/health` belongs to runtime containers and is not the node's public health endpoint.
 
-| Field | Type | Description | Example |
-|-------|------|-------------|----------|
-| `port` | string | HTTP server port | `:8080` |
-| `ginMode` | string | Gin framework mode | `release` or `debug` |
-| `redisURL` | string | Redis connection URL | `redis://@localhost:6379/0` |
-| `arweaveURL` | string | Arweave gateway URL | `https://arweave.net` |
-| `hymxURL` | string | Local node URL for SDK calls | `http://127.0.0.1:8080` |
-| `prvKey` | string | Ethereum private key (hex) | `0x64dd...` |
-| `keyfilePath` | string | Alternative to prvKey | `./keyfile.json` |
-| `nodeName` | string | Node identifier | `my-node` |
-| `nodeDesc` | string | Node description | `Production node` |
-| `nodeURL` | string | Public node URL | `https://my-node.com` |
-| `joinNetwork` | boolean | Join HyMatrix network | `false` (testing), `true` (production) |
+### 3.4 Local capability test without a chain
 
-> 📚 **For detailed configuration options**, see [HyMatrix Configuration Documentation](https://docs.hymatrix.com/docs/join-the-network/setup)
+```bash
+bash scripts/e2e_capability.sh
+```
 
-## 📋 Module Configuration
+This validates Module contents, workspace seeding, and container mounts. Real image build and Spawn are opt-in:
 
-> 📘 **Full profile-driven build & spawn guide:** [docs/profile-module-guide.md](docs/profile-module-guide.md).
-> V2 modules are built from a declarative `profile.toml`; that guide is the authoritative, step-by-step reference. This section is a summary.
+```bash
+RUN_REAL_SPAWN=1 bash scripts/e2e_capability.sh
+```
 
-### 🏷️ Module Format Requirements
+## 4. Build and run a Module
 
-VMDocker modules must follow specific format requirements to ensure proper container execution:
+This flow is for Module authors. See [profile-module-guide.md](docs/profile-module-guide.md) for the full schema, artifacts, and cold-start behavior.
 
-#### **ModuleFormat Specification**
+For detailed, copyable steps from adapter build through Spawn, Export, and re-Spawn, follow the [manual end-to-end round-trip guide](docs/manual-roundtrip-test.md).
 
-V2 uses a single module format constant (no per-runtime prefix):
+### 4.1 Build the platform adapter
 
-- **Module Format**: `hymx.vmdockerv2.v0.0.1`
+Every Module image uses `vmdocker-agent` as its fixed entrypoint. It comes from the sibling repository and must match the target image architecture.
 
-The node mounts the spawn handler under this format (`s.Mount(ModuleFormat, vmdocker.Spawn)`); any other format is rejected with `unsupported module format`.
+```bash
+cd ../vmdocker_agent
+scripts/build.sh
+export VMDOCKER_AGENT_BIN="$PWD/build/vmdocker-agent"
+cd ../vmdockerv2
+```
 
-#### **Required Tags**
+Use `scripts/build.sh amd64` or `scripts/build.sh arm64` to select a target architecture.
 
-Every VMDocker module **MUST** include the following tags:
-
-| Tag Name | Description | Example |
-|----------|-------------|----------|
-| `Image-Name` | Docker image name and tag | `chriswebber/docker-golua:v0.0.2` |
-| `Image-ID` | Docker image SHA256 digest | `sha256:b2e104cdcb5c09a8f213aefcadd451cbabfda1f16c91107e84eef051f807d45b` |
-| `Image-Source` | Module image source selector | `module-data` |
-| `Image-Archive-Format` | Embedded image archive format | `container-tar+image.tar.gz` |
-
-> ⚠️ **Important**: `Image-Name`, `Image-ID`, `Image-Source=module-data`, and `Image-Archive-Format` are mandatory. The current builder emits `Image-Archive-Format=container-tar+image.tar.gz`; the loader still accepts the legacy `docker-save+gzip`. `Build-Type` / legacy `Build-*` modules are rejected.
-
-#### **What A Module Contains**
-
-VMDocker sandbox modules no longer store a Dockerfile or build recipe for spawn-time builds.
-
-The generated module bundle `data` is a gzipped container-tar carrying:
-
-- `image.tar.gz` — the image, produced by `docker save <image> | gzip`
-- `profile.toml` — the declarative build recipe, also seeded into the workspace on spawn
-- `public.zip` — optional; the exportable files selected by `[vmdocker].public`
-
-plus metadata tags: `Image-Name`, `Image-ID`, `Image-Source=module-data`, `Image-Archive-Format=container-tar+image.tar.gz`, `Capability-Public`, `Member-Image-SHA256`.
-
-`Runtime-Backend` is not stored in the module. Backend selection happens at spawn time.
-
-At spawn time, VMDocker behaves like this:
-
-1. Check whether local Docker already has `Image-Name` with the expected `Image-ID`
-2. If it exists, start immediately
-3. If it does not exist, read `mod/mod-<module-id>.json`
-4. Decode bundle `data`, gunzip it, run `docker image load`
-5. Re-tag and verify the restored image
-6. Start the sandbox/runtime
-
-#### **Runtime Tags And Spawn Tags**
-
-Backend and startup behavior are split on purpose:
-
-- Module tags describe the image itself
-- Spawn tags describe how this specific run should execute
-
-Recommended module tags:
-
-| Tag Name | Where | Description | Example |
-|----------|-------|-------------|----------|
-| `Start-Command` | module | Default runtime entry command for both docker and sandbox backends | `/usr/local/bin/start-vmdocker-agent.sh` |
-| `Sandbox-Agent` | module | Docker Sandbox agent type | `shell` |
-| `Openclaw-Version` | module | Optional runtime metadata | `2026.3.13` |
-
-Supported spawn-time runtime tags:
-
-| Tag Name | Where | Description | Example |
-|----------|-------|-------------|----------|
-| `Runtime-Backend` | spawn | Runtime backend selector | `docker`, `sandbox` |
-| `Start-Command` | spawn | Optional one-off override for module `Start-Command` | `/app/custom-entrypoint --serve` |
-
-Backend rules:
-
-- If spawn sets `Runtime-Backend`, VMDocker uses that backend
-- If spawn omits it, VMDocker chooses by OS
-- macOS / Windows default to `sandbox`
-- Linux defaults to `docker`
-- Linux rejects `Runtime-Backend=sandbox`
-
-`Start-Command` rules:
-
-- `Start-Command` should normally live in the module
-- Spawn may override it for testing or one-off runtime changes
-- The value is parsed as `command + args`, not as a shell fragment
-
-#### **Runtime Workspace And Environment**
-
-Both `docker` and `sandbox` now follow the same fixed runtime workspace contract.
-
-Given the default workspace root, VMDocker resolves the per-instance workspace as:
+### 4.2 Create a minimal profile
 
 ```text
-<workspace-root>/sandbox_workspace/<pid>
+myagent/
+├── profile.toml
+├── bin/
+│   └── .keep
+└── skills/
+    └── soul.md
 ```
 
-The runtime then uses these paths inside that workspace:
+`myagent/profile.toml`:
 
-| Environment Variable | Default Value |
-|----------------------|---------------|
-| `OPENCLAW_HOME` | `<workspace>` |
-| `OPENCLAW_STATE_DIR` | `<workspace>/.openclaw` |
-| `OPENCLAW_CONFIG_PATH` | `<workspace>/.openclaw/openclaw.json` |
-| `OPENCLAW_AGENT_WORKSPACE` | `<workspace>/.openclaw/workspace` |
-| `HOME` | `<workspace>/.home` |
-| `TMPDIR` | `<workspace>/.tmp` |
-| `XDG_CONFIG_HOME` | `<workspace>/.xdg/config` |
-| `XDG_CACHE_HOME` | `<workspace>/.xdg/cache` |
-| `XDG_STATE_HOME` | `<workspace>/.xdg/state` |
+```toml
+[dockerfile]
+FROM = "docker/sandbox-templates:shell"
+bin = "bin"
+# CMD = ["my-agent", "--serve"]
 
-If these env vars are already provided explicitly, VMDocker preserves the explicit value.
+[vmdocker]
+public = ["~/skills/*"]
+```
 
-#### **Current Runtime Confinement**
+`FROM` and `bin` are required. `bin` may be empty, but the directory must exist. `CMD` is optional and is launched by the fixed adapter entrypoint.
 
-The current runtime policy is:
-
-- `docker`: container root filesystem is read-only; the mapped instance workspace remains writable
-- `sandbox`: runtime startup hardens common writable locations such as `/tmp`, `/var/tmp`, `/home/agent`, and `/workspace`, while keeping the mapped instance workspace writable
-
-This means both backends are intended to write runtime state only inside the mapped per-instance workspace.
-
-#### **End-To-End Workflow**
-
-The full, current workflow — writing `profile.toml`, building the module, and spawning it — lives in
-**[docs/profile-module-guide.md](docs/profile-module-guide.md)**. Claude-specific runtime notes:
-[docs/claude-runtime.md](docs/claude-runtime.md). In short:
+### 4.3 Configure the build environment
 
 ```bash
-# 1) Build the linux platform adapter from the sibling repo vmdocker_agent
-cd ../vmdocker_agent
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o /tmp/vmdocker-agent .
+cp .env.example .env
+```
 
-# 2) Build + sign a module from your profile.toml (needs VMDOCKER_PRIVATE_KEY)
-cd ../vmdockerv2
-export VMDOCKER_URL=http://127.0.0.1:8080
-export VMDOCKER_PRIVATE_KEY=0x<your-key>
-go run ./cmd/module -profile ./mymod/profile.toml -agent-bin /tmp/vmdocker-agent
-#  -> [module] saved module <id> -> mod-<id>.json
+Use one `.env` file for Module builds and example programs:
 
-# 3) Make the module available to the node, then start it
-mkdir -p ./mod && cp mod-<id>.json ./mod/mod-<id>.json
+```dotenv
+VMDOCKER_AGENT_BIN=/absolute/path/to/vmdocker_agent/build/vmdocker-agent
+VMDOCKER_URL=http://127.0.0.1:8080
+VMDOCKER_PRIVATE_KEY=0xreplace_with_a_development_key
+RUNTIME_BACKEND=docker
+```
+
+`.env` is ignored by Git. Never commit a real private key.
+
+`cmd/module` requires `VMDOCKER_PRIVATE_KEY` and an adapter path, provided by `VMDOCKER_AGENT_BIN` or `-agent-bin`. `VMDOCKER_URL` is primarily used by the examples to reach the node.
+
+### 4.4 Build and save the Module
+
+```bash
+go run ./cmd/module \
+  -profile ./myagent/profile.toml \
+  -agent-bin "$VMDOCKER_AGENT_BIN"
+```
+
+The command runs `docker build`, `docker save`, and signing, then writes `mod-<id>.json`. Place it in the node working directory's `mod/` folder:
+
+```bash
+mkdir -p mod
+cp mod-<id>.json mod/mod-<id>.json
+```
+
+### 4.5 Spawn the Module
+
+Add the generated Module ID and the node account returned by `/info` to `.env`:
+
+```dotenv
+VMDOCKER_MODULE_ID=<module-id>
+VMDOCKER_SCHEDULER=<node-account-id>
+RUNTIME_BACKEND=docker
+```
+
+A fresh full node may need Token and Registry initialization before Spawn:
+
+```bash
+go run ./examples init
+go run ./examples spawn
+```
+
+Success prints `spawned pid: <process-id>`. Follow the [manual end-to-end round-trip guide](docs/manual-roundtrip-test.md) for the complete Spawn, Export, and re-Spawn procedure.
+
+## 5. Runtime backend
+
+The `Runtime-Backend` Spawn tag selects the backend. It is not stored in the Module: the Module describes the image, while Spawn chooses how to run this instance.
+
+| Platform | Default | Available | Notes |
+|---|---|---|---|
+| Linux | `docker` | `docker` | Linux rejects `sandbox` |
+| macOS / Windows | `sandbox` | `sandbox`, `docker` | `sandbox` needs the Docker Sandbox CLI |
+
+```go
+[]schema.Tag{{Name: "Runtime-Backend", Value: "docker"}}
+```
+
+Pass the runtime type through `Container-Env-RUNTIME_TYPE`. It controls adapter readiness for values such as `claude`, `openclaw`, or `test`; it is not a `profile.toml` field.
+
+## 6. Configuration
+
+The node reads YAML configuration. Start with [cmd/config.yaml](cmd/config.yaml) for development; replace keys, URLs, and network settings in production.
+
+| Field | Description | Example |
+|---|---|---|
+| `port` | HTTP listen address | `:8080` |
+| `ginMode` | Gin mode | `debug`, `release` |
+| `redisURL` | Redis for node state | `redis://@localhost:6379/0` |
+| `arweaveURL` | Arweave gateway | `https://arweave.net` |
+| `hymxURL` | Node URL used by the SDK | `http://127.0.0.1:8080` |
+| `prvKey` | Node private key; takes precedence when set | `0x...` |
+| `keyfilePath` | Used when `prvKey` is empty | `./keyfile.json` |
+| `nodeName` | Node name | `my-node` |
+| `nodeURL` | URL reachable by peers | `https://node.example.com` |
+| `joinNetwork` | Join the network | `false`, `true` |
+
+`enablePayment` and `enableChainkit` are optional subsystems. Their settings are required only when enabled.
+
+## 7. Core capabilities
+
+### Self-contained Modules
+
+A Module contains `image.tar.gz`, `profile.toml`, and optional `public.zip`. Spawn validates `Image-Name`, `Image-ID`, `Image-Source`, and the archive format.
+
+Legacy `Build-Type` / `Build-*` Modules are unsupported. The current builder emits `container-tar+image.tar.gz`.
+
+### Isolated workspaces
+
+Each process uses `<node-working-directory>/sandbox_workspace/<pid>`, mapped to `/home/hymx`. The `docker` backend uses a read-only root filesystem, while `sandbox` hardens common writable paths.
+
+Runtime state belongs in the workspace. See [sandbox-workspace-layout.md](spec/sandbox-workspace-layout.md) for the full directory and permission contract.
+
+### Public files and Export
+
+`[vmdocker].public` is a HOME-relative export allowlist. Build and Export collect only matching files; everything else remains private.
+
+```toml
+[vmdocker]
+public = ["~/skills/*", "~/persona/*.md", "~/investment.md"]
+```
+
+### Checkpoint and Restore
+
+Checkpoint saves the workspace and adapter-exposed runtime state. Restore applies it to the target instance. It is not a generic host-process memory snapshot; the current implementation does not require CRIU.
+
+## 8. Troubleshooting
+
+### The node does not start
+
+- Check Redis connectivity: `redis-cli -u redis://@localhost:6379/0 ping`.
+- Pass the intended config path: `--config ./cmd/config.yaml`.
+- Never reuse the repository's development key in production.
+
+### `/info` works but Spawn fails
+
+- Confirm that the Docker daemon is running: `docker info`.
+- Confirm that the Module is at `mod/mod-<id>.json` under the node's current working directory.
+- Confirm that `VMDOCKER_MODULE_ID` exactly matches the ID in the file name.
+- Check that the image architecture matches the host, such as `amd64` or `arm64`.
+
+### `unsupported module format`
+
+Only `hymx.vmdockerv2.v0.0.1` is accepted. Rebuild V1 or `Build-Type` Modules with the current `cmd/module`.
+
+### `docker sandbox CLI is not available`
+
+Install Docker Desktop with `docker sandbox` support, or explicitly select `Runtime-Backend=docker` on macOS or Windows.
+
+### The runtime never becomes ready
+
+Confirm that the image contains `/usr/local/bin/vmdocker-agent` and that `RUNTIME_TYPE` matches the image. Claude and OpenClaw use different readiness checks.
+
+See [claude-runtime.md](docs/claude-runtime.md) for Claude-specific guidance.
+
+## 9. Development and testing
+
+```bash
+# All unit tests
+go test ./...
+
+# Node binary
 go build -o ./build/hymx-node ./cmd
-./build/hymx-node --config ./config.yaml
+
+# Module and workspace capability
+bash scripts/e2e_capability.sh
+
+# Real build and Spawn
+RUN_REAL_SPAWN=1 bash scripts/e2e_capability.sh
 ```
 
-**Validate cold start from module data:** delete the local image matching `Image-Name` and spawn again
-with the same module id; the runtime restores it via
-`module file -> bundle data -> gunzip -> docker image load -> start`.
+Further reading:
 
-**Local end-to-end checks (no chain):** run `bash scripts/e2e_capability.sh` (add `RUN_REAL_SPAWN=1`
-for a real build + spawn). See the guide for `cmd/vmme2e` (`seed` / `seed-clone` / `export` /
-`pack-synthetic`) details.
+- [Complete Profile → Module guide](docs/profile-module-guide.md)
+- [Manual end-to-end round trip](docs/manual-roundtrip-test.md)
+- [Runtime workspace contract](spec/sandbox-workspace-layout.md)
+- [Claude Runtime](docs/claude-runtime.md)
+- [E2E capability test](scripts/e2e_capability.md)
+- [Module builder internals](vmdocker/modulebuild/README.md)
 
-#### **Validation Process**
-
-VMDocker validates a module when it resolves the runtime spec (`CheckModuleFormat` / `imageInfoFromTags` in `vmdocker/utils/utils.go`):
-
-1. ✅ **Module Format**: must be `hymx.vmdockerv2.v0.0.1`
-2. ✅ **Image-Name**: must be present
-3. ✅ **Image-ID**: must be present
-4. ✅ **Image-Source**: must equal `module-data`
-5. ✅ **Image-Archive-Format**: must be `container-tar+image.tar.gz` or `docker-save+gzip`
-6. 🚫 **Build-Type**: rejected — legacy build modules are no longer supported
-
-If any check fails, the module is rejected and container creation fails.
-
-## 🚀 Running VMDocker
-
-### 1. 🔴 Start Redis Server
-
-Ensure Redis is running before starting VMDocker:
-
-```bash
-# Ubuntu/Debian
-sudo systemctl start redis-server
-sudo systemctl enable redis-server
-
-# CentOS/RHEL
-sudo systemctl start redis
-sudo systemctl enable redis
-
-# macOS (with Homebrew)
-brew services start redis
-```
-
-### 2. 🚀 Launch VMDocker Node
-
-```bash
-# From the project root directory
-./build/hymx-node --config ./config.yaml
-```
-
-### 3. ✅ Verify Startup
-
-Successful startup will display:
-
-```
-INFO[07-25|00:00:01] server is running   module=node-v0.0.1 wallet=0x... port=:8080
-```
-
-## 🌐 Network Participation
-
-### 🔗 Join HyMatrix Network
-
-To participate as a network node operator:
-
-1. **Configure for Production**
-   ```yaml
-   joinNetwork: true
-   nodeURL: https://your-public-domain.com  # Your public URL
-   ```
-
-2. **Stake HMX Tokens**
-   - Acquire the required HMX tokens
-   - Complete the staking process
-
-3. **Complete Registration**
-   - Submit node registration
-   - Wait for network acceptance
-
-### 💰 Rewards
-
-Participating nodes earn rewards for:
-- ⚡ **Computation execution**
-- 📝 **Log submission**
-- 🔗 **Network services**
-- 🛡️ **Network security**
-
-> 📖 **For detailed network joining instructions**, see [HyMatrix Network Documentation](https://docs.hymatrix.com/docs/category/join-the-network)
-
-## Using
-
-### Run AOS Client
-
-vmdocker is an AO-compatible system. Use the modified AOS to connect to vmdocker.
-
-1. Clone AOS repository:
-   ```bash
-   git clone https://github.com/cryptowizard0/aos
-   ```
-
-2. Install Node.js dependencies:
-   ```bash
-   npm install
-   ```
-
-3. Start AOS client:
-    - `cu-url` and `mu-url` should be the same as the vmdocker node url
-    - `scheduler` is the vmdocker node id
-   ```bash
-   DEBUG=true node src/index.js \
-    --cu-url=http://127.0.0.1:8080 \
-    --mu-url=http://127.0.0.1:8080 \
-    --scheduler=0x972AeD684D6f817e1b58AF70933dF1b4a75bfA51 \
-    test_name
-   ``` 
-
-   After the first launch, please record your Process ID. To reconnect to the specific process later, use the following command:
-
-   ```bash
-   DEBUG=true node src/index.js \
-    --cu-url=http://127.0.0.1:8080 \
-    --mu-url=http://127.0.0.1:8080 \
-    --scheduler=0x972AeD684D6f817e1b58AF70933dF1b4a75bfA51 \
-    {{processId}}
-   ```
-
-### Examples
-
-Reference implementations are available in the `examples` directory.
+Read [AGENTS.md](AGENTS.md) before contributing. This project is licensed under the [MIT License](LICENSE).
