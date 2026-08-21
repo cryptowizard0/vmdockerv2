@@ -57,7 +57,7 @@ func run(c *cli.Context) (err error) {
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 
 	// node config
-	port, ginMode, redisURL, arweaveURL, hymxURL, bundler, nodeInfo, err := LoadNodeConfig()
+	port, ginMode, redisURL, arweaveURL, hymxURL, bundler, nodeInfo, decryptor, err := LoadNodeConfig()
 	if err != nil {
 		return err
 	}
@@ -78,7 +78,7 @@ func run(c *cli.Context) (err error) {
 		return err
 	}
 
-	node := node.New(bundler, redisURL, arweaveURL, hymxURL, nodeInfo, chainkit)
+	node := node.New(decryptor, bundler, redisURL, arweaveURL, hymxURL, nodeInfo, chainkit)
 
 	s := server.New(node, pay)
 
@@ -93,7 +93,7 @@ func run(c *cli.Context) (err error) {
 	// ex:
 	// s.AddResultHandler(handlers)
 
-	s.Run(port, nodeSchema.StartModeNormal)
+	s.Run(port, "", nodeSchema.StartModeNormal)
 
 	log.Info("server is running", "protocol version", schema.Variant, "node version", nodeSchema.NodeVersion, "wallet", bundler.Address, "port", port)
 
