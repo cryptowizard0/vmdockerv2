@@ -8,8 +8,9 @@ require (
 	github.com/ethereum/go-ethereum v1.14.11
 	github.com/everFinance/goether v1.2.0
 	github.com/gin-gonic/gin v1.10.0
-	github.com/hymatrix/hymx v0.4.8
+	github.com/hymatrix/hymx v0.5.0
 	github.com/inconshreveable/log15 v2.16.0+incompatible
+	github.com/pelletier/go-toml/v2 v2.2.2
 	github.com/permadao/goar v1.1.1
 	github.com/spf13/viper v1.19.0
 	github.com/stretchr/testify v1.11.1
@@ -77,7 +78,6 @@ require (
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/panjf2000/ants/v2 v2.11.3 // indirect
-	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/redis/go-redis/v9 v9.7.0 // indirect
