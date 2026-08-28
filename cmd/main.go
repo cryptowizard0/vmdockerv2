@@ -59,7 +59,7 @@ func run(c *cli.Context) (err error) {
 	defer signal.Stop(signals)
 
 	// node config
-	port, ginMode, redisURL, arweaveURL, hymxURL, bundler, nodeInfo, decryptor, err := LoadNodeConfig()
+	port, adminPort, ginMode, redisURL, arweaveURL, hymxURL, bundler, nodeInfo, decryptor, err := LoadNodeConfig()
 	if err != nil {
 		return err
 	}
@@ -95,9 +95,9 @@ func run(c *cli.Context) (err error) {
 	// ex:
 	// s.AddResultHandler(handlers)
 
-	s.Run(port, "", nodeSchema.StartModeNormal)
+	s.Run(port, adminPort, nodeSchema.StartModeNormal)
 
-	log.Info("server is running", "protocol version", schema.Variant, "node version", nodeSchema.NodeVersion, "wallet", bundler.Address, "port", port)
+	log.Info("server is running", "protocol version", schema.Variant, "node version", nodeSchema.NodeVersion, "wallet", bundler.Address, "port", port, "adminPort", adminPort)
 
 	<-signals
 	// Hymx v0.6.0 Close skips VM checkpoints. Without them, restart replays every message
