@@ -8,7 +8,7 @@ require (
 	github.com/ethereum/go-ethereum v1.14.11
 	github.com/everFinance/goether v1.2.0
 	github.com/gin-gonic/gin v1.10.0
-	github.com/hymatrix/hymx v0.5.0
+	github.com/hymatrix/hymx v0.6.0
 	github.com/inconshreveable/log15 v2.16.0+incompatible
 	github.com/pelletier/go-toml/v2 v2.2.2
 	github.com/permadao/goar v1.1.1
