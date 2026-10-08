@@ -54,7 +54,9 @@ func action(c *cli.Context) error {
 
 func run(c *cli.Context) (err error) {
 	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	// SIGUSR1 is hymx's `stop --checkpoint` signal; handle it so it cannot kill the node uncleanly.
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGUSR1)
+	defer signal.Stop(signals)
 
 	// node config
 	port, ginMode, redisURL, arweaveURL, hymxURL, bundler, nodeInfo, decryptor, err := LoadNodeConfig()
@@ -98,7 +100,9 @@ func run(c *cli.Context) (err error) {
 	log.Info("server is running", "protocol version", schema.Variant, "node version", nodeSchema.NodeVersion, "wallet", bundler.Address, "port", port)
 
 	<-signals
-	s.Close()
+	// Hymx v0.6.0 Close skips VM checkpoints. Without them, restart replays every message
+	// since the last checkpoint through the runtime, re-running agent calls.
+	s.CloseWithCheckpoint()
 
 	return nil
 }
