@@ -236,6 +236,7 @@ The node reads YAML configuration. Start with [cmd/config.yaml](cmd/config.yaml)
 | Field | Description | Example |
 |---|---|---|
 | `port` | HTTP listen address | `:8080` |
+| `adminPort` | Admin API listen address; empty (default) disables it | `127.0.0.1:18081` |
 | `ginMode` | Gin mode | `debug`, `release` |
 | `redisURL` | Redis for node state | `redis://@localhost:6379/0` |
 | `arweaveURL` | Arweave gateway | `https://arweave.net` |
@@ -277,7 +278,7 @@ Checkpoint saves the workspace and adapter-exposed runtime state. Restore applie
 
 The node saves checkpoints for all running VMs on shutdown (Ctrl+C, SIGTERM, SIGUSR1 or `stop`). Without a checkpoint, restart replays every message since the last one through the runtime, which re-runs agent calls.
 
-Since Hymx v0.6.0, `POST /admin/vms/stop` stops a VM without saving a checkpoint. Use `POST /admin/vms/stopWithCheckpoint` to keep the previous stop-and-save behavior.
+The admin API is served only when `adminPort` is set (see [Configuration](#6-configuration)). Since Hymx v0.6.0, `POST /admin/vms/stop` stops a VM without saving a checkpoint. Use `POST /admin/vms/stopWithCheckpoint` to keep the previous stop-and-save behavior.
 
 ## 8. Troubleshooting
 
